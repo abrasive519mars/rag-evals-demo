@@ -8,11 +8,13 @@ unanswerable questions so refusal can be measured exactly.
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Protocol
 
 REFUSAL = "Not answerable from the provided passages."
+_RETRIES = 6
 
 SYSTEM_PROMPT = f"""You answer questions using only the numbered passages provided by the user.
 
@@ -95,9 +97,25 @@ class GeminiGenerator:
         )
         self.name = model
 
+    def _with_retry(self, fn):
+        """Retry on rate limits and capacity errors (429, 503) with exponential backoff."""
+        delay = 2.0
+        for attempt in range(_RETRIES):
+            try:
+                return fn()
+            except Exception as exc:  # noqa: BLE001 - the SDK raises several error classes
+                code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+                if attempt == _RETRIES - 1 or code not in (429, 500, 503):
+                    raise
+                time.sleep(delay)
+                delay = min(delay * 2, 60.0)
+        raise RuntimeError("unreachable")
+
     def generate(self, question: str, passages: list[dict]) -> Answer:
-        resp = self._client.models.generate_content(
-            model=self.name, contents=build_user_prompt(question, passages), config=self._config
+        resp = self._with_retry(
+            lambda: self._client.models.generate_content(
+                model=self.name, contents=build_user_prompt(question, passages), config=self._config
+            )
         )
         usage = {}
         if resp.usage_metadata:
@@ -108,9 +126,12 @@ class GeminiGenerator:
         return parse_answer(resp.text or "", passages, usage, self.name)
 
     def stream(self, question: str, passages: list[dict]) -> Iterator[str]:
-        for chunk in self._client.models.generate_content_stream(
-            model=self.name, contents=build_user_prompt(question, passages), config=self._config
-        ):
+        it = self._with_retry(
+            lambda: self._client.models.generate_content_stream(
+                model=self.name, contents=build_user_prompt(question, passages), config=self._config
+            )
+        )
+        for chunk in it:
             if chunk.text:
                 yield chunk.text
 

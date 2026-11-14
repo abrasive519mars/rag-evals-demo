@@ -91,7 +91,7 @@ Reciprocal rank fusion, k = 60, over the sparse and dense candidate lists, each 
 
 ## 5. Generation design
 
-System instruction: answer only from the numbered passages; cite each claim as `[n]` immediately after it; if the passages do not contain the answer, reply exactly `Not answerable from the provided passages.` Passages are numbered 1..`k_final` and carry their ids. Model `gemini-2.5-flash`, temperature 0, max 512 output tokens, streamed over server-sent events.
+System instruction: answer only from the numbered passages; cite each claim as `[n]` immediately after it; if the passages do not contain the answer, reply exactly `Not answerable from the provided passages.` Passages are numbered 1..`k_final` and carry their ids. Model `gemini-3.8-flash` (the 2.5 generation is closed to new API keys as of November 2026), temperature 0, max 512 output tokens, streamed over server-sent events.
 
 Output contract: answer text containing `[n]` markers. The server resolves each marker to `{n, passage_id, text}`. Markers that do not resolve to a provided passage are dropped and counted (citation validity metric). `FakeGenerator` returns a deterministic answer citing `[1]` so API and parser tests run without network.
 
@@ -110,7 +110,7 @@ Per served mode, on the `legacy200` query set (200 queries, about 2,000 judge ca
 - Refusal: for unanswerable queries the expected output is the refusal string; refusal precision and recall are reported.
 - Citation validity: share of `[n]` markers that resolve to a provided passage.
 
-Judge model: stronger than the generator and, where a key is available, from a different model family. Default: `gemini-2.5-pro`. Verdicts are cached by SHA-256 of (judge model, prompt version, answer, passages), so a rerun after a retrieval change re-judges only what changed. Human audit: 20 randomly sampled verdicts labelled by hand; the agreement rate is published in `docs/judge_audit.md`.
+Judge model: from a different model family than the generator. Default: OpenAI `gpt-5-mini` with strict JSON output. Verdicts are cached by SHA-256 of (judge model, prompt version, answer, passages), so a rerun after a retrieval change re-judges only what changed. Human audit: 20 randomly sampled verdicts labelled by hand; the agreement rate is published in `docs/judge_audit.md`.
 
 ### 6.3 Latency
 
@@ -161,6 +161,6 @@ Image: `python:3.12-slim`, CPU PyTorch wheel, faiss-cpu, SciPy; encoder and cros
 
 ## 12. Open assumptions
 
-- Judge defaults to `gemini-2.5-pro` unless another provider key is supplied.
+- Judge is `gpt-5-mini`; swapping the judge means re-running `--answers` (verdicts are cached per judge model).
 - Answer metrics on all 200 queries if limits allow.
 - PDF upload (Stage 11) is optional and does not affect the evaluation.

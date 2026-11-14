@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     encoder_name: str = "minilm-l6-msmarco-ft"  # folder inside artifacts_dir
     base_encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2"
     reranker_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    gen_model: str = "gemini-2.5-flash"
+    gen_model: str = "gemini-3.8-flash"  # 2.5 Flash is closed to new API keys as of Nov 2026
     judge_model: str = "gpt-5-mini"
 
     # retrieval defaults (see docs/design.md section 4)
