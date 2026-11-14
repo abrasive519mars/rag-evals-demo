@@ -55,7 +55,10 @@ def main() -> None:
     print("space:", url)
 
     if not args.no_secrets:
-        gemini = os.environ.get("GEMINI_API_KEY") or __import__("ragdemo.config", fromlist=["x"]).get_settings().gemini_api_key
+        gemini = (
+            os.environ.get("GEMINI_API_KEY")
+            or __import__("ragdemo.config", fromlist=["x"]).get_settings().gemini_api_key
+        )
         if gemini:
             api.add_space_secret(args.repo, "GEMINI_API_KEY", gemini)
             print("secret GEMINI_API_KEY set")

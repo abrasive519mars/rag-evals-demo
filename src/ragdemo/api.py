@@ -11,6 +11,7 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -96,13 +97,14 @@ def create_app(
     if evals_dir is not None:
         state.evals_dir = evals_dir
 
-    app = FastAPI(title="rag-evals-demo", version="0.2.0")
-    app.state.rag = state
-
-    @app.on_event("startup")
-    def _startup() -> None:
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
         if load_real and not state.ready:
             threading.Thread(target=_load_real, args=(state,), daemon=True).start()
+        yield
+
+    app = FastAPI(title="rag-evals-demo", version="0.2.0", lifespan=lifespan)
+    app.state.rag = state
 
     def _require_ready() -> None:
         if not state.ready:
