@@ -1,0 +1,46 @@
+[project]
+name = "rag-evals-demo"
+version = "0.2.0"
+description = "Retrieval-augmented QA over one million MS MARCO passages with a measured evaluation: sparse, dense, hybrid, reranked."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "numpy>=1.26",
+    "scipy>=1.12",
+    "faiss-cpu>=1.8",
+    "sentence-transformers>=3.0",
+    "huggingface_hub>=0.24",
+    "google-genai>=1.0",
+    "openai>=1.40",
+]
+
+[project.optional-dependencies]
+build = ["datasets>=2.20", "rank-bm25>=0.2.2"]
+dev = ["pytest>=8", "httpx>=0.27", "ruff>=0.5", "rank-bm25>=0.2.2"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["data", "static"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "slow: needs the real small models (encoder, cross-encoder); skipped in CI",
+    "integration: needs API keys and the real artifacts; skipped in CI",
+]

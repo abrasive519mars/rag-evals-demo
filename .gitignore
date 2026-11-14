@@ -1,0 +1,22 @@
+# secrets: never committed
+.env
+*.env
+secrets*
+
+# large artifacts live on the Hugging Face dataset repo, not in git
+data/artifacts/
+data/cache/
+*.npy
+*.index
+*.npz
+*.pkl
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
