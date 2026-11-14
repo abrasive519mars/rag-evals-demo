@@ -38,6 +38,7 @@ def main() -> None:
     p.add_argument("--shard", type=int, default=50_000)
     p.add_argument("--batch", type=int, default=256)
     p.add_argument("--max-seq", type=int, default=256)
+    p.add_argument("--device", default="cpu", help="cpu, or cuda on a Colab GPU")
     args = p.parse_args()
 
     sys.stdout.reconfigure(encoding="utf-8")
@@ -51,7 +52,7 @@ def main() -> None:
     n_shards = (n + args.shard - 1) // args.shard
     print(f"{n:,} passages, {n_shards} shards of {args.shard:,}, model {args.model}", flush=True)
 
-    model = SentenceTransformer(args.model, device="cpu")
+    model = SentenceTransformer(args.model, device=args.device)
     model.max_seq_length = args.max_seq
     dim = model.get_sentence_embedding_dimension()
 

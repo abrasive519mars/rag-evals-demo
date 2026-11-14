@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rag-evals-demo</title>
+<style>
+  :root { --bg:#fafafa; --fg:#1b1b1b; --muted:#666; --card:#fff; --line:#e3e3e3; --accent:#0b5fff; --mark:#fff3b0; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111; --fg:#eaeaea; --muted:#9a9a9a; --card:#1a1a1a; --line:#2c2c2c; --accent:#6ea0ff; --mark:#4a4420; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  header { padding:20px 16px 0; max-width:960px; margin:0 auto; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 16px; font-size:14px; }
+  nav { display:flex; gap:8px; border-bottom:1px solid var(--line); }
+  nav button { background:none; border:none; color:var(--muted); padding:10px 12px; font-size:15px; cursor:pointer; border-bottom:2px solid transparent; }
+  nav button.active { color:var(--fg); border-bottom-color:var(--accent); }
+  main { max-width:960px; margin:0 auto; padding:16px; }
+  section { display:none; } section.active { display:block; }
+  form { display:grid; grid-template-columns: 1fr auto auto auto; gap:8px; align-items:center; }
+  input, select, button.primary { font:inherit; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--fg); }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); cursor:pointer; }
+  @media (max-width:640px) { form { grid-template-columns: 1fr 1fr; } form input { grid-column: 1 / -1; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-top:14px; }
+  .answer { font-size:17px; white-space:pre-wrap; }
+  .answer a.cite { color:var(--accent); text-decoration:none; font-weight:600; }
+  .answer a.cite:hover { background:var(--mark); }
+  .timings { color:var(--muted); font-size:13px; margin-top:8px; }
+  details { margin-top:8px; } summary { cursor:pointer; color:var(--muted); }
+  .hit { padding:8px 0; border-top:1px solid var(--line); font-size:14px; }
+  .hit:first-child { border-top:none; }
+  .hit .meta { color:var(--muted); font-size:12px; }
+  .hit.lit { background:var(--mark); }
+  table { border-collapse:collapse; width:100%; font-size:14px; margin-top:10px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--muted); font-weight:600; }
+  .tablewrap { overflow-x:auto; }
+  .muted { color:var(--muted); }
+  code { background:var(--card); border:1px solid var(--line); padding:1px 5px; border-radius:5px; font-size:13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>rag-evals-demo</h1>
+  <p class="sub">Grounded answers over <span id="corpus">…</span> MS MARCO passages. Pick a retrieval mode, ask, and read the citations.</p>
+  <nav>
+    <button data-tab="ask" class="active">Ask</button>
+    <button data-tab="evals">Evals</button>
+    <button data-tab="about">About</button>
+  </nav>
+</header>
+<main>
+  <section id="ask" class="active">
+    <form id="askform">
+      <input id="q" placeholder="e.g. what is the normal range for blood pressure" autocomplete="off" required>
+      <select id="mode">
+        <option value="hybrid_rerank">hybrid + rerank</option>
+        <option value="hybrid">hybrid</option>
+        <option value="dense">dense</option>
+        <option value="bm25">bm25</option>
+      </select>
+      <select id="k"><option>3</option><option selected>5</option><option>8</option><option>10</option></select>
+      <button class="primary" id="go">Ask</button>
+    </form>
+    <div id="status" class="muted" style="margin-top:10px"></div>
+    <div id="out" class="card" style="display:none">
+      <div class="answer" id="answer"></div>
+      <div class="timings" id="timings"></div>
+      <details open><summary>Retrieved passages</summary><div id="hits"></div></details>
+    </div>
+  </section>
+
+  <section id="evals">
+    <p class="muted">Numbers come from <code>evals/*.json</code>, produced by <code>make eval</code>. Percentages; latency is p50 per query.</p>
+    <div id="evalsbody">Loading…</div>
+  </section>
+
+  <section id="about">
+    <div class="card">
+      <p>One service, five retrieval configurations, every choice measured. Sparse BM25 stored as a term-weight matrix, a MiniLM encoder fine-tuned on MS MARCO over an HNSW index, reciprocal rank fusion, and a cross-encoder reranker. Gemini writes the answer from the retrieved passages and must cite each claim; a judge from a different model family grades faithfulness and correctness.</p>
+      <p>Design: <code>docs/design.md</code>. Build notes: <code>docs/build-log.md</code>. Findings: <code>docs/findings.md</code>. Source on GitHub: <code>abrasive519mars/rag-evals-demo</code>.</p>
+      <p class="muted">Citations open the passage below the answer. Repeated questions are served from an exact-match cache and marked as such.</p>
+    </div>
+  </section>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x === b));
+  document.querySelectorAll('section').forEach(s => s.classList.toggle('active', s.id === b.dataset.tab));
+  if (b.dataset.tab === 'evals') loadEvals();
+}));
+
+fetch('/health').then(r => r.json()).then(h => {
+  $('#corpus').textContent = h.corpus_size ? h.corpus_size.toLocaleString() : 'the';
+  if (h.status !== 'ok') $('#status').textContent = h.status === 'loading' ? 'Artifacts are loading, give it a minute…' : ('Service error: ' + h.error);
+});
+
+function esc(s) { return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function renderAnswer(text, hits) {
+  const html = esc(text).replace(/\[(\d{1,2})\]/g, (m, n) => {
+    const h = hits[n - 1];
+    return h ? `<a class="cite" href="#hit-${n}" data-n="${n}">[${n}]</a>` : m;
+  });
+  $('#answer').innerHTML = html;
+  document.querySelectorAll('a.cite').forEach(a => a.addEventListener('click', (e) => {
+    e.preventDefault();
+    document.querySelectorAll('.hit').forEach(x => x.classList.remove('lit'));
+    const el = document.getElementById('hit-' + a.dataset.n);
+    if (el) { el.classList.add('lit'); el.scrollIntoView({behavior:'smooth', block:'center'}); }
+  }));
+}
+function renderHits(hits) {
+  $('#hits').innerHTML = hits.map(h => `
+    <div class="hit" id="hit-${h.rank}">
+      <div class="meta">[${h.rank}] pid ${h.pid} · score ${Number(h.score).toFixed(4)}${h.url ? ` · <a href="${esc(h.url)}" target="_blank" rel="noopener">source</a>` : ''}</div>
+      <div>${esc(h.text)}</div>
+    </div>`).join('');
+}
+function renderTimings(t, cached) {
+  const parts = Object.entries(t).filter(([k]) => k !== 'end_to_end').map(([k, v]) => `${k} ${Math.round(v)} ms`);
+  if (t.end_to_end) parts.push(`end to end ${Math.round(t.end_to_end)} ms`);
+  $('#timings').textContent = (cached ? 'cached · ' : '') + parts.join(' · ');
+}
+
+$('#askform').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = { question: $('#q').value.trim(), mode: $('#mode').value, k: Number($('#k').value) };
+  if (!body.question) return;
+  $('#go').disabled = true; $('#status').textContent = 'Retrieving…';
+  $('#out').style.display = 'block'; $('#answer').textContent = ''; $('#hits').innerHTML = ''; $('#timings').textContent = '';
+  try {
+    const resp = await fetch('/ask', { method:'POST', headers:{'content-type':'application/json', 'accept':'text/event-stream'}, body: JSON.stringify(body) });
+    if (!resp.ok) { $('#status').textContent = 'Error ' + resp.status + ': ' + (await resp.text()); return; }
+    const reader = resp.body.getReader(); const dec = new TextDecoder();
+    let buf = '', text = '', hits = [];
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const block = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        const ev = /^event: (.*)$/m.exec(block)?.[1]; const data = JSON.parse(/^data: (.*)$/m.exec(block)?.[1] || '{}');
+        if (ev === 'retrieval') { hits = data.hits; renderHits(hits); $('#status').textContent = 'Generating…'; }
+        else if (ev === 'token') { text += data.text; $('#answer').textContent = text; }
+        else if (ev === 'done') { renderAnswer(data.answer, hits); renderTimings(data.timings_ms, data.cached); $('#status').textContent = data.refused ? 'The model found no answer in the retrieved passages.' : ''; }
+      }
+    }
+  } catch (err) { $('#status').textContent = 'Request failed: ' + err; }
+  finally { $('#go').disabled = false; }
+});
+
+const pct = (x) => x == null ? '' : (100 * x).toFixed(1);
+const ms = (row, stage) => { const l = row.latency_ms && row.latency_ms[stage]; return l ? Math.round(l.p50) : ''; };
+function table(headers, rows) {
+  return `<div class="tablewrap"><table><thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
+let evalsLoaded = false;
+async function loadEvals() {
+  if (evalsLoaded) return;
+  const resp = await fetch('/evals');
+  if (!resp.ok) { $('#evalsbody').innerHTML = '<p class="muted">No evaluation report yet.</p>'; return; }
+  const d = await resp.json(); let html = '';
+  if (d.retrieval_report) {
+    const rep = d.retrieval_report; const rows = rep.rows;
+    const find = (n, qs) => rows.find(r => r.name === n && r.query_set === qs);
+    const order = [['bm25','BM25'],['dense_base','Dense, base MiniLM, exact'],['dense_flat','Dense, fine-tuned, exact'],['dense','Dense, fine-tuned, HNSW'],['dense_int8_rescore200','Dense, int8 + rescore 200'],['hybrid','Hybrid (RRF)'],['hybrid_rerank','Hybrid + rerank']];
+    html += `<div class="card"><strong>Retrieval, val1000 (held out), ${rep.corpus_size.toLocaleString()} passages</strong>` +
+      table(['Configuration','R@1','R@5','R@10','R@20','MRR@10','nDCG@10','p50 ms'],
+        order.map(([n, label]) => find(n, 'val1000')).filter(Boolean).map(r => [order.find(o => o[0] === r.name)[1], pct(r.metrics['recall@1']), pct(r.metrics['recall@5']), pct(r.metrics['recall@10']), pct(r.metrics['recall@20']), pct(r.metrics['mrr@10']), pct(r.metrics['ndcg@10']), ms(r,'total') || ms(r,'dense') || ms(r,'dense_batch_avg')])) + '</div>';
+    const size = [['bm25_82k','bm25','BM25'],['dense_82k','dense','Dense'],['hybrid_82k','hybrid','Hybrid']].map(([a,b,l]) => [find(a,'legacy200'), find(b,'legacy200'), l]).filter(([a,b]) => a && b);
+    if (size.length) html += `<div class="card"><strong>Corpus size, same 200 queries: 82k vs full</strong>` + table(['Mode','R@10 at 82k','R@10 full','Change'], size.map(([a,b,l]) => [l, pct(a.metrics['recall@10']), pct(b.metrics['recall@10']), (100*(b.metrics['recall@10']-a.metrics['recall@10'])).toFixed(1)])) + '</div>';
+    if (rep.comparisons && rep.comparisons.length) html += `<div class="card"><strong>Differences with 95% bootstrap intervals (points)</strong>` + table(['Comparison','Metric','Set','Diff','95% CI','Significant'], rep.comparisons.map(c => [`${c.label} (${c.a} vs ${c.b})`, c.metric, c.query_set, (100*c.mean_diff).toFixed(1), `[${(100*c.ci95[0]).toFixed(1)}, ${(100*c.ci95[1]).toFixed(1)}]`, c.significant ? 'yes' : 'no'])) + '</div>';
+  }
+  if (d.answers_report) {
+    const rep = d.answers_report;
+    html += `<div class="card"><strong>Answers, legacy200 + unans50 · generator ${esc(rep.generator)} · judge ${esc(rep.judge)}</strong>` +
+      table(['Mode','Faithfulness','Correct','Partial','Incorrect','Refusal recall','False refusals','Citation validity','gen p50 ms'],
+        rep.rows.map(r => [r.mode, pct(r.metrics.faithfulness), pct(r.metrics.correct), pct(r.metrics.partial), pct(r.metrics.incorrect), pct(r.metrics.refusal_recall), r.metrics.false_refusals, pct(r.metrics.citation_validity), ms(r,'generate')])) + '</div>';
+  }
+  $('#evalsbody').innerHTML = html || '<p class="muted">Report has no rows.</p>'; evalsLoaded = true;
+}
+</script>
+</body>
+</html>

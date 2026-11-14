@@ -28,7 +28,10 @@ def tokenize(text: str) -> list[str]:
 
 class BM25Index:
     def __init__(self, weights: sp.csc_matrix, vocab: dict[str, int], meta: dict):
-        self._w = weights  # shape (n_docs, n_terms), float32, column-sliceable
+        self._w = weights.tocsc()  # shape (n_docs, n_terms), float32; one column = one posting list
+        self._indptr = self._w.indptr
+        self._indices = self._w.indices
+        self._data = self._w.data.astype(np.float32, copy=False)
         self._vocab = vocab
         self.meta = meta
 
@@ -96,10 +99,14 @@ class BM25Index:
     def scores(self, query: str) -> np.ndarray:
         """Dense score vector over all documents (zeros for documents sharing no term)."""
         cols = [self._vocab[t] for t in tokenize(query) if t in self._vocab]
-        if not cols:
-            return np.zeros(self.n_docs, dtype=np.float32)
-        # repeated query terms count once per occurrence, as in rank_bm25
-        return np.asarray(self._w[:, cols].sum(axis=1)).ravel().astype(np.float32)
+        s = np.zeros(self.n_docs, dtype=np.float32)
+        # one scatter-add per query term over that term's posting list; a repeated query term is
+        # added once per occurrence, as in rank_bm25. Within a column each document appears once,
+        # so the fancy-index add is exact.
+        for col in cols:
+            a, b = self._indptr[col], self._indptr[col + 1]
+            s[self._indices[a:b]] += self._data[a:b]
+        return s
 
     def search(self, query: str, k: int) -> list[Hit]:
         s = self.scores(query)

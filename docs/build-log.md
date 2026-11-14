@@ -38,3 +38,38 @@ Decisions made while building:
 Encoding runs on this laptop's CPU rather than Colab: two passes over 759k passages with the fine-tuned and the base MiniLM, then the HNSW index (M = 32, efConstruction = 200) and the int8 copy. Throughput and wall time are recorded in Stage 5 with the first table.
 
 Check: `python -m ragdemo.artifacts verify` prints the corpus size, the pid alignment at the legacy boundary (pids 0, 82325, 82326) and the three query-set sizes.
+
+Encoding reality check: the fine-tuned MiniLM runs at about 70 passages per second on this CPU (a 50k shard every 12 minutes), not the 400 per second I estimated, because MS MARCO passages average about 95 word-pieces and the 22-thread Core Ultra has only six performance cores. The full corpus takes about three hours per model. Consequence: the fine-tuned encoding and the HNSW index run tonight; the base-model encoding for the fine-tuning-gain row is deferred to a Colab T4 in the morning (ten minutes there), using the same `scripts/encode.py --device cuda`. The chained job was restarted so the index build does not wait behind the base model.
+
+## Stage 2: sparse retrieval (15 Nov, night)
+
+BM25 is stored as a documents x vocabulary sparse matrix of precomputed term weights. Scoring a query is one scatter-add per query term over that term's posting list, then a top-k partition over the score vector. The weights use exactly the Okapi formula of `rank_bm25` (including its floor for negative idf), and a test checks equality with `rank_bm25` to 1e-6 on a fixture, so the two implementations are interchangeable and only speed differs.
+
+Numbers on the full corpus: 759,421 documents, 317,744 terms, 37.8 million non-zeros, 304 MB in memory, built in 54 seconds. Average document length 73 tokens.
+
+First latency measurement on `val1000`: p50 32 ms, p95 55 ms with the scipy column-slice formulation; p50 18 ms for scoring plus about 14 ms for top-k with the scatter-add formulation. Both measured while the encoding job was saturating the CPU, so they are upper bounds; the clean number is taken in Stage 5. BM25 alone reaches recall@10 of 0.550 on `val1000`, a sanity check that the index is correct (BM25 on MS MARCO passage ranking is typically in the 0.5 to 0.6 range at this cutoff).
+
+## Stages 3 and 4: dense retrieval, fusion, reranking, pipeline (15 Nov, night)
+
+- `DenseIndex` wraps a FAISS index; `flat` builds an exact inner-product index from a matrix for the recall-loss measurement and for tests. `efSearch` is a runtime knob.
+- `Int8Index` holds int8 vectors with one scale per dimension, searches exactly in int8, and optionally rescores the top candidates against the float32 matrix. This is the quantisation row of the table.
+- `rrf` is reciprocal rank fusion with k = 60: a passage's fused score is the sum of 1 / (60 + rank) over the lists it appears in. Ranks only, so BM25 and cosine scores never need calibrating against each other.
+- `CrossEncoderReranker` lazy-loads `cross-encoder/ms-marco-MiniLM-L-6-v2` and scores (query, passage) pairs jointly for the top `rerank_depth` fused candidates. `NoopReranker` keeps the fused order for tests and for machines without the model.
+- `Retriever.search(query, RetrievalConfig)` runs one of four served modes and returns hits plus per-stage timings. In hybrid modes the query is encoded on one thread while BM25 scores on another.
+- `HashEncoder` is a deterministic bag-of-words hash used only in tests, so the whole pipeline is tested end to end without a model or network.
+
+Check: 22 unit tests on fixture corpora, every mode returns k hits with timings, fusion prefers passages found by both retrievers, config validation rejects bad modes and k values.
+
+## Stages 5 to 8 code written ahead of the data (15 Nov, night)
+
+While the encoder runs, the code that consumes its output was written and unit-tested against fixtures:
+
+- `evals/metrics.py`: recall@k, MRR@10, nDCG@10, gold rank, and a paired bootstrap for the difference between two systems on the same queries.
+- `evals/retrieval.py`: runs every served mode on `val1000` and `legacy200`, plus evaluation-only rows (exact search, int8 with rescoring depths, HNSW efSearch sweep, rerank depth sweep, the 82k legacy index with a BM25 built over the same 82k rows) and the named comparisons with intervals.
+- `generation.py`: system prompt with the fixed refusal string, Gemini generator (streaming and blocking), citation parser that counts unresolved markers, fake generator for tests.
+- `evals/judge.py`: OpenAI `gpt-5-mini` judge with strict JSON schemas for faithfulness (claim by claim) and correctness (against the human answer), verdicts cached by content hash; a fake judge for tests.
+- `evals/answers.py`: generation per served mode over `legacy200` and `unans50`, grading, refusal precision and recall, citation validity, token usage; generations cached by content hash.
+- `evals/report.py` and `evals/run.py`: render the JSON reports as markdown tables and write them into the README between markers.
+- `api.py`: `/health`, `/search`, `/ask` (server-sent events or JSON), `/evals`, `/`; exact-match LRU cache; components injected so tests run with fixtures. `static/index.html`: Ask, Evals and About tabs, streaming client, citations that open the passage.
+
+Check: 46 tests pass, including the API event sequence and error codes.
