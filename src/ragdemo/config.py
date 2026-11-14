@@ -27,8 +27,11 @@ class Settings(BaseSettings):
     encoder_name: str = "minilm-l6-msmarco-ft"  # folder inside artifacts_dir
     base_encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2"
     reranker_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    gen_model: str = "gemini-3.8-flash"  # 2.5 Flash is closed to new API keys as of Nov 2026
+    gen_model: str = (
+        "gemini-3.5-flash"  # 2.5 Flash is closed to new keys; 3.8 and 3.7 were overloaded at build time
+    )
     judge_model: str = "gpt-5-mini"
+    judge_fallback_model: str = "gemini-3.6-flash"  # used when the OpenAI key cannot be billed
 
     # retrieval defaults (see docs/design.md section 4)
     k_candidates: int = 50

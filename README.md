@@ -21,8 +21,8 @@ Not yet measured. The table is written here by `make eval`.
 | Dense retrieval | MiniLM-L6 fine-tuned on MS MARCO hard negatives, 384-d, FAISS HNSW | Small enough for CPU serving; the base model is kept as a row so the fine-tuning gain is a number |
 | Fusion | Reciprocal rank fusion, k = 60 | Ranks only, so sparse and dense scores never need calibrating |
 | Rerank | `cross-encoder/ms-marco-MiniLM-L-6-v2` over the fused top 50 | Joint (query, passage) scoring where it is affordable: on 50 candidates, not 759k |
-| Generation | Gemini 3.8 Flash, temperature 0, cite every claim as `[n]`, fixed refusal string | Citations are resolved server-side; unresolved markers are counted; refusals are measurable |
-| Judge | `gpt-5-mini`, strict JSON, claim-level faithfulness and correctness against the human answer | A different family from the generator; verdicts cached by content hash |
+| Generation | Gemini 3.5 Flash, temperature 0, cite every claim as `[n]`, fixed refusal string | Citations are resolved server-side; unresolved markers are counted; refusals are measurable |
+| Judge | A model other than the generator, strict JSON, claim-level faithfulness and correctness against the human answer: `gpt-5-mini` when the OpenAI key is billable, else Gemini 3.6 Flash | Verdicts cached by content hash, so swapping the judge is a rerun |
 | Serving | FastAPI, server-sent events, exact-match cache, single static page | One container, one API key |
 
 ## Run it

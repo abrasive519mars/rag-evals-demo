@@ -18,8 +18,22 @@ from ..generation import FakeGenerator, GeminiGenerator
 from ..pipeline import Retriever
 from . import answers as answers_eval
 from . import retrieval as retrieval_eval
-from .judge import FakeJudge, OpenAIJudge
+from .judge import FakeJudge, GeminiJudge, OpenAIJudge
 from .report import render, write_readme
+
+
+def pick_judge(s, choice: str):
+    """OpenAI gpt-5-mini when the key works; otherwise a Gemini model different from the generator."""
+    if choice in ("auto", "openai") and s.openai_api_key:
+        judge = OpenAIJudge(s.openai_api_key, s.judge_model)
+        try:
+            judge.correctness("ping", "pong", ["pong"])
+            return judge
+        except Exception as exc:  # noqa: BLE001
+            if choice == "openai":
+                raise
+            print(f"  OpenAI judge unavailable ({type(exc).__name__}); falling back to Gemini", flush=True)
+    return GeminiJudge(s.gemini_api_key, s.judge_fallback_model)
 
 
 def main() -> None:
@@ -30,6 +44,7 @@ def main() -> None:
     p.add_argument("--limit", type=int, default=None, help="use only the first N queries of each set")
     p.add_argument("--no-rerank", action="store_true", help="skip the cross-encoder rows")
     p.add_argument("--fake", action="store_true", help="fake generator and judge (no API calls)")
+    p.add_argument("--judge", choices=["auto", "openai", "gemini"], default="auto")
     p.add_argument("--out", default="evals")
     args = p.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
@@ -49,7 +64,7 @@ def main() -> None:
         reranker = None if args.no_rerank else art.load_reranker()
         retriever = Retriever(encoder, dense, sparse, art.texts, reranker=reranker)
         generator = FakeGenerator() if args.fake else GeminiGenerator(s.gemini_api_key, s.gen_model)
-        judge = FakeJudge() if args.fake else OpenAIJudge(s.openai_api_key, s.judge_model)
+        judge = FakeJudge() if args.fake else pick_judge(s, args.judge)
         modes = ("bm25", "dense", "hybrid") + (() if args.no_rerank else ("hybrid_rerank",))
         rep = answers_eval.run(
             art, retriever, generator, judge, out, modes=modes, k_final=s.k_final, limit=args.limit

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from pathlib import Path
 from typing import Protocol
 
@@ -75,6 +76,16 @@ def _key(*parts: str) -> str:
     return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
 
 
+def faithfulness_user(answer: str, passages: list[str]) -> str:
+    blocks = "\n\n".join(f"PASSAGE {i}: {p}" for i, p in enumerate(passages, start=1)) or "PASSAGES: (none)"
+    return f"{blocks}\n\nANSWER: {answer}"
+
+
+def correctness_user(question: str, answer: str, references: list[str]) -> str:
+    refs = "\n".join(f"- {r}" for r in references) or "- (none)"
+    return f"QUESTION: {question}\n\nREFERENCE ANSWER(S):\n{refs}\n\nCANDIDATE ANSWER: {answer}"
+
+
 def parse_faithfulness(raw: str) -> dict:
     """Tolerant parser: returns {'claims': [...], 'supported': k, 'total': n, 'score': k/n}."""
     try:
@@ -133,16 +144,21 @@ class OpenAIJudge:
         return raw
 
     def faithfulness(self, answer: str, passages: list[str]) -> dict:
-        blocks = (
-            "\n\n".join(f"PASSAGE {i}: {p}" for i, p in enumerate(passages, start=1)) or "PASSAGES: (none)"
+        return parse_faithfulness(
+            self._call(
+                FAITHFULNESS_SYSTEM, faithfulness_user(answer, passages), "faithfulness", FAITHFULNESS_SCHEMA
+            )
         )
-        user = f"{blocks}\n\nANSWER: {answer}"
-        return parse_faithfulness(self._call(FAITHFULNESS_SYSTEM, user, "faithfulness", FAITHFULNESS_SCHEMA))
 
     def correctness(self, question: str, answer: str, references: list[str]) -> dict:
-        refs = "\n".join(f"- {r}" for r in references) or "- (none)"
-        user = f"QUESTION: {question}\n\nREFERENCE ANSWER(S):\n{refs}\n\nCANDIDATE ANSWER: {answer}"
-        return parse_correctness(self._call(CORRECTNESS_SYSTEM, user, "correctness", CORRECTNESS_SCHEMA))
+        return parse_correctness(
+            self._call(
+                CORRECTNESS_SYSTEM,
+                correctness_user(question, answer, references),
+                "correctness",
+                CORRECTNESS_SCHEMA,
+            )
+        )
 
 
 class FakeJudge:
@@ -162,3 +178,78 @@ class FakeJudge:
     def correctness(self, question: str, answer: str, references: list[str]) -> dict:
         verdict = "correct" if any(r.lower() in answer.lower() for r in references if r) else "incorrect"
         return parse_correctness(json.dumps({"verdict": verdict, "reason": "fake"}))
+
+
+def _gemini_schema(schema: dict) -> dict:
+    """Gemini's response_schema accepts an OpenAPI subset; drop keys it rejects."""
+    if isinstance(schema, dict):
+        return {k: _gemini_schema(v) for k, v in schema.items() if k != "additionalProperties"}
+    if isinstance(schema, list):
+        return [_gemini_schema(x) for x in schema]
+    return schema
+
+
+class GeminiJudge:
+    """Judge on a Gemini model different from the generator. Used when no second-provider key works.
+
+    Same prompts, same schemas, same cache layout as OpenAIJudge, so swapping judges is a rerun.
+    """
+
+    def __init__(
+        self, api_key: str, model: str = "gemini-3.6-flash", cache_dir: Path = Path("data/cache/judge")
+    ):
+        from google import genai
+        from google.genai import types
+
+        if not api_key:
+            raise RuntimeError("GEMINI_API_KEY is not set")
+        self._client = genai.Client(api_key=api_key)
+        self._types = types
+        self.name = model
+        self._cache = cache_dir
+        self._cache.mkdir(parents=True, exist_ok=True)
+
+    def _call(self, system: str, user: str, schema_name: str, schema: dict) -> str:
+        key = _key(self.name, PROMPT_VERSION, schema_name, system, user)
+        path = self._cache / f"{key}.json"
+        if path.exists():
+            return path.read_text(encoding="utf-8")
+        config = self._types.GenerateContentConfig(
+            system_instruction=system,
+            temperature=0.0,
+            max_output_tokens=1024,
+            response_mime_type="application/json",
+            response_schema=_gemini_schema(schema),
+            thinking_config=self._types.ThinkingConfig(thinking_budget=0),
+        )
+        delay = 2.0
+        for attempt in range(6):
+            try:
+                resp = self._client.models.generate_content(model=self.name, contents=user, config=config)
+                break
+            except Exception as exc:  # noqa: BLE001
+                code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+                if attempt == 5 or code not in (429, 500, 503):
+                    raise
+                time.sleep(delay)
+                delay = min(delay * 2, 60.0)
+        raw = resp.text or "{}"
+        path.write_text(raw, encoding="utf-8")
+        return raw
+
+    def faithfulness(self, answer: str, passages: list[str]) -> dict:
+        return parse_faithfulness(
+            self._call(
+                FAITHFULNESS_SYSTEM, faithfulness_user(answer, passages), "faithfulness", FAITHFULNESS_SCHEMA
+            )
+        )
+
+    def correctness(self, question: str, answer: str, references: list[str]) -> dict:
+        return parse_correctness(
+            self._call(
+                CORRECTNESS_SYSTEM,
+                correctness_user(question, answer, references),
+                "correctness",
+                CORRECTNESS_SCHEMA,
+            )
+        )

@@ -91,7 +91,7 @@ Reciprocal rank fusion, k = 60, over the sparse and dense candidate lists, each 
 
 ## 5. Generation design
 
-System instruction: answer only from the numbered passages; cite each claim as `[n]` immediately after it; if the passages do not contain the answer, reply exactly `Not answerable from the provided passages.` Passages are numbered 1..`k_final` and carry their ids. Model `gemini-3.8-flash` (the 2.5 generation is closed to new API keys as of November 2026), temperature 0, max 512 output tokens, streamed over server-sent events.
+System instruction: answer only from the numbered passages; cite each claim as `[n]` immediately after it; if the passages do not contain the answer, reply exactly `Not answerable from the provided passages.` Passages are numbered 1..`k_final` and carry their ids. Model `gemini-3.5-flash` (the 2.5 generation is closed to new API keys as of November 2026; the model is a setting, and 3.8 Flash returned capacity errors for minutes at a time while this was built), temperature 0, max 512 output tokens, streamed over server-sent events.
 
 Output contract: answer text containing `[n]` markers. The server resolves each marker to `{n, passage_id, text}`. Markers that do not resolve to a provided passage are dropped and counted (citation validity metric). `FakeGenerator` returns a deterministic answer citing `[1]` so API and parser tests run without network.
 
@@ -110,7 +110,7 @@ Per served mode, on the `legacy200` query set (200 queries, about 2,000 judge ca
 - Refusal: for unanswerable queries the expected output is the refusal string; refusal precision and recall are reported.
 - Citation validity: share of `[n]` markers that resolve to a provided passage.
 
-Judge model: from a different model family than the generator. Default: OpenAI `gpt-5-mini` with strict JSON output. Verdicts are cached by SHA-256 of (judge model, prompt version, answer, passages), so a rerun after a retrieval change re-judges only what changed. Human audit: 20 randomly sampled verdicts labelled by hand; the agreement rate is published in `docs/judge_audit.md`.
+Judge model: a model other than the generator. Default OpenAI `gpt-5-mini` with strict JSON output when the key is billable; otherwise `gemini-3.6-flash` with a JSON response schema (same prompts, same cache layout). At build time the OpenAI project had no credits, so the first published tables use the Gemini judge; a second-family judge is a config change and a rerun. Verdicts are cached by SHA-256 of (judge model, prompt version, answer, passages), so a rerun after a retrieval change re-judges only what changed. Human audit: 20 randomly sampled verdicts labelled by hand; the agreement rate is published in `docs/judge_audit.md`.
 
 ### 6.3 Latency
 
