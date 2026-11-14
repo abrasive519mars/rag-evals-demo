@@ -228,15 +228,18 @@ def run(art: Artifacts, out_dir: Path, query_limit: int | None = None, with_rera
         rows.append(eval_int8(encoder, np.asarray(q8), scale, emb_ft, val, "val1000", rescore))
     del flat
 
-    base_enc = STEncoder(s.base_encoder_name)
-    emb_base = np.load(art.dir / "emb_base.npy", mmap_mode="r")
-    base_flat = DenseIndex.flat(np.asarray(emb_base))
-    rows.append(
-        eval_dense_matrix(
-            "dense_base", "base all-MiniLM-L6-v2, exact search", base_enc, base_flat, val, "val1000"
+    if (art.dir / "emb_base.npy").exists():
+        base_enc = STEncoder(s.base_encoder_name)
+        emb_base = np.load(art.dir / "emb_base.npy", mmap_mode="r")
+        base_flat = DenseIndex.flat(np.asarray(emb_base))
+        rows.append(
+            eval_dense_matrix(
+                "dense_base", "base all-MiniLM-L6-v2, exact search", base_enc, base_flat, val, "val1000"
+            )
         )
-    )
-    del base_flat
+        del base_flat
+    else:
+        print("  emb_base.npy missing: skipping the dense_base row", flush=True)
 
     rows += eval_82k(art, encoder, legacy)
 
