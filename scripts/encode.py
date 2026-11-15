@@ -1,11 +1,12 @@
-"""Encode every corpus passage with a sentence-transformers model, on CPU, resumably.
+"""Encode every corpus passage with a sentence-transformers model, resumably and with a small footprint.
 
-Shards of --shard passages are written to data/cache/<out-stem>.shardNNN.npy and skipped on
-rerun, so a disconnect or a sleep costs at most one shard. The final file is float32,
-L2-normalised, row i == pid i.
+Shards of --shard passages are written to data/cache/<out-stem>.shardNNN.npy and skipped on rerun, so a
+disconnect, a sleep or an out-of-memory stop costs at most one shard. Only one shard of text is in memory at
+a time (the file is indexed by byte offset once). The final file is float32, L2-normalised, row i == pid i.
 
   python scripts/encode.py --model data/artifacts/minilm-l6-msmarco-ft --out data/artifacts/emb_ft.npy
   python scripts/encode.py --model sentence-transformers/all-MiniLM-L6-v2 --out data/artifacts/emb_base.npy
+  python scripts/encode.py ... --device cuda --batch 512          # on a Colab GPU, about ten minutes
 """
 
 from __future__ import annotations
@@ -19,11 +20,22 @@ from pathlib import Path
 import numpy as np
 
 
-def read_texts(corpus_path: Path) -> list[str]:
+def line_offsets(path: Path) -> list[int]:
+    offsets = []
+    with path.open("rb") as f:
+        pos = 0
+        for line in f:
+            offsets.append(pos)
+            pos += len(line)
+    return offsets
+
+
+def read_rows(path: Path, offsets: list[int], lo: int, hi: int) -> list[str]:
     texts: list[str] = []
-    with corpus_path.open(encoding="utf-8") as f:
-        for i, line in enumerate(f):
-            row = json.loads(line)
+    with path.open("rb") as f:
+        f.seek(offsets[lo])
+        for i in range(lo, hi):
+            row = json.loads(f.readline().decode("utf-8"))
             assert row["pid"] == i, f"corpus rows must be in pid order (row {i} has pid {row['pid']})"
             texts.append(row["text"])
     return texts
@@ -44,16 +56,22 @@ def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     from sentence_transformers import SentenceTransformer
 
-    texts = read_texts(Path(args.corpus))
-    n = len(texts)
+    corpus = Path(args.corpus)
+    offsets = line_offsets(corpus)
+    n = len(offsets)
     out = Path(args.out)
     cache = Path(args.cache)
     cache.mkdir(parents=True, exist_ok=True)
     n_shards = (n + args.shard - 1) // args.shard
-    print(f"{n:,} passages, {n_shards} shards of {args.shard:,}, model {args.model}", flush=True)
+    print(
+        f"{n:,} passages, {n_shards} shards of {args.shard:,}, model {args.model}, device {args.device}",
+        flush=True,
+    )
 
     model = SentenceTransformer(args.model, device=args.device)
     model.max_seq_length = args.max_seq
+    if args.device.startswith("cuda"):
+        model.half()
     dim = model.get_sentence_embedding_dimension()
 
     t0 = time.time()
@@ -64,7 +82,7 @@ def main() -> None:
         lo, hi = s * args.shard, min((s + 1) * args.shard, n)
         t = time.time()
         emb = model.encode(
-            texts[lo:hi],
+            read_rows(corpus, offsets, lo, hi),
             batch_size=args.batch,
             normalize_embeddings=True,
             convert_to_numpy=True,
@@ -72,8 +90,7 @@ def main() -> None:
         ).astype(np.float32)
         np.save(shard_path, emb)
         rate = (hi - lo) / (time.time() - t)
-        done = hi
-        eta = (n - done) / rate / 60
+        eta = (n - hi) / rate / 60
         print(f"shard {s + 1}/{n_shards} done, {rate:,.0f} passages/s, eta {eta:.0f} min", flush=True)
 
     full = np.lib.format.open_memmap(out, mode="w+", dtype=np.float32, shape=(n, dim))

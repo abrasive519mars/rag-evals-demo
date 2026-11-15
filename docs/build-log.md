@@ -73,3 +73,16 @@ While the encoder runs, the code that consumes its output was written and unit-t
 - `api.py`: `/health`, `/search`, `/ask` (server-sent events or JSON), `/evals`, `/`; exact-match LRU cache; components injected so tests run with fixtures. `static/index.html`: Ask, Evals and About tabs, streaming client, citations that open the passage.
 
 Check: 46 tests pass, including the API event sequence and error codes.
+
+## Stopped overnight: memory pressure (15 Nov, 05:30)
+
+The encoding job was stopped by the Claude Code harness at about 05:30 because the laptop ran critically low on memory: 3.8 GB free of 15.6 GB even after the job died, with OneDrive, the VPN client, Spotify and Discord resident. Two of sixteen shards (100,000 passages) are saved in `data/cache/` and will be reused. Per the harness rule the job is not restarted unattended.
+
+Two ways to finish the embeddings in the morning:
+
+1. Colab T4, about 30 minutes end to end, no laptop load: run `scripts/colab_encode.py` as described in its docstring. It encodes with both models, builds the HNSW and int8 indexes, and publishes everything to the dataset repo with an updated manifest.
+2. Locally, about 3 hours: close the heavy apps, then rerun the same two commands (`scripts/encode.py` resumes from the saved shards and now holds only one shard of text in memory, about 1 GB total, instead of the whole corpus; then `scripts/build_index.py`).
+
+After either path, the rest is one command each: `python -m ragdemo.evals.run --retrieval`, then `--answers`, then `--write-readme`, then `python scripts/deploy_space.py`.
+
+Model notes from the live smoke tests tonight: Gemini 2.5 Flash is closed to new API keys; 3.8 and 3.7 Flash returned capacity errors for minutes at a time; 3.5 Flash answered in about 0.6 s with the thinking budget set to 0 (2.4 s with thinking on) and refused exactly when asked an off-corpus question. The OpenAI project has no credits, so the judge falls back to Gemini 3.6 Flash, which correctly flagged a planted unsupported claim in the smoke test.
