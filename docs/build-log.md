@@ -97,3 +97,20 @@ Two housekeeping changes made when the files came down:
 - `python -m ragdemo.artifacts verify --download --eval` fetched the 4 GB in five minutes and reported every file `ok` against the manifest, including the legacy 82k index.
 
 Memory plan for the retrieval evaluation, from reading `evals/retrieval.py`: the HNSW index (1.4 GB), the BM25 matrix (0.3 GB) and the two small models stay loaded throughout; the exact flat index adds a 1.2 GB copy, freed before the base-encoder flat index adds its own. Peak is about 3.5 GB of process memory plus the memory-mapped embedding pages, so the run waits for the laptop to have at least 5 GB free.
+
+## Stage 5: retrieval evaluation, run on Colab (16 to 17 Nov)
+
+Why not on the laptop: the evaluation holds the served stack in memory (HNSW index 1.4 GB, BM25 matrix 0.3 GB, encoder, cross-encoder), about 2.6 GB of process memory. The laptop has 15.6 GB, of which about 3.5 GB is available with a browser open, and the Claude Code harness stops background jobs when free memory gets that low. The first full run was stopped at the 16-minute mark when the laptop lid was closed; the second attempt was not started because the margin was already gone. Memory-mapping the FAISS index (`IO_FLAG_MMAP`, faiss 1.13.2) made no difference on Windows: resident memory was 1.42 GB either way.
+
+Two changes came out of that before the run moved:
+
+- Every finished row is checkpointed to `evals/.checkpoint/` and reused on rerun for the same query count, so a stopped run loses at most the row in progress. The three phases are ordered by memory: the served stack is released before the first exact flat index is built, and each flat index is released before the next.
+- The encoder and the cross-encoder take a `device` setting. On a Colab T4 the whole run takes 30 minutes; the cross-encoder, which scores 33 to 44 pairs per second on the laptop CPU (12 threads beat the default 16 by 30% on the hybrid-core chip, hence `TORCH_THREADS`), does its 180,000 pairs in a few minutes on the GPU. The int8 rows dominate the Colab run instead: NumPy int8 matrix products over 759k rows cost 405 ms per query on two vCPUs, 20 of the 30 minutes.
+
+The report's latencies therefore describe the Colab machine and say so in the README. CPU serving latency is measured on the deployed host once there is one.
+
+Two rows were added on the laptop afterwards with `scripts/add_legacy200_exact_rows.py`: exact search for both encoders on the 200 training-split queries, done as a chunked matrix product over the memory-mapped embedding files so it runs in a few hundred megabytes. They answer whether the fine-tuned encoder at least fits its own training queries (it does not; see `findings.md`).
+
+Hosting surprise: creating the Docker Space returned HTTP 402. Since mid-2026 Gradio and Docker Spaces on the free CPU tier need a PRO subscription (about $9 a month); only static Spaces are free. The ForensIQ Space from March predates that change and was deleted during the key cleanup, so it cannot be reused either. The options are PRO, Modal (free monthly credits, scales to zero, cold start of about 30 s), or shipping the repo and a video without a live link. `deploy_space.py` now creates the Space private by default so the first build can be checked before anything is public.
+
+Results are in `findings.md`. The two that change the system: the cross-encoder reranker is the only component with a large, significant effect (+16.2 MRR points), and the fine-tuned encoder loses to its own base model on held-out and on training queries, so the served encoder switches to base `all-MiniLM-L6-v2` in the next stage.

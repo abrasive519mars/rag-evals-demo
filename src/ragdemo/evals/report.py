@@ -15,7 +15,9 @@ def _pct(x: float | None) -> str:
 
 def _ms(row: dict, stage: str = "total") -> str:
     lat = row.get("latency_ms", {}).get(stage)
-    return f"{lat['p50']:.0f}" if lat else ""
+    if not lat:
+        return ""
+    return f"{lat['p50']:.1f}" if lat["p50"] < 10 else f"{lat['p50']:.0f}"
 
 
 def _find(rows: list[dict], name: str, query_set: str) -> dict | None:
@@ -35,8 +37,7 @@ def retrieval_tables(rep: dict) -> str:
         ("bm25", "BM25 (sparse matrix)"),
         ("dense_base", "Dense, base MiniLM, exact"),
         ("dense_flat", "Dense, fine-tuned MiniLM, exact"),
-        ("dense", "Dense, fine-tuned MiniLM, HNSW"),
-        ("dense_int8_rescore200", "Dense, int8 vectors + rescore 200"),
+        ("dense", "Dense, fine-tuned MiniLM, HNSW (served)"),
         ("hybrid", "Hybrid (RRF of BM25 and dense)"),
         ("hybrid_rerank", "Hybrid + cross-encoder rerank (depth 50)"),
     ]
@@ -51,8 +52,22 @@ def retrieval_tables(rep: dict) -> str:
             f"{_pct(m.get('recall@20'))} | {_pct(m.get('mrr@10'))} | {_pct(m.get('ndcg@10'))} | {lat} |"
         )
 
+    enc_rows = [
+        (_find(rows, n, qs), qs) for n in ("dense_flat", "dense_base") for qs in ("val1000", "legacy200")
+    ]
+    if all(r for r, _ in enc_rows):
+        out.append(
+            "\nEncoder comparison, exact search, R@10 in percent. The fine-tuned model was trained from the base "
+            "model on 5,000 MS MARCO pairs; `legacy200` queries come from that training split.\n"
+        )
+        out.append("| Encoder | val1000 (held out) | legacy200 (training queries) |")
+        out.append("|---|---|---|")
+        for name, label in (("dense_base", "Base all-MiniLM-L6-v2"), ("dense_flat", "Fine-tuned MiniLM")):
+            a, b = _find(rows, name, "val1000"), _find(rows, name, "legacy200")
+            out.append(f"| {label} | {_pct(a['metrics']['recall@10'])} | {_pct(b['metrics']['recall@10'])} |")
+
     out.append(
-        "\nCorpus size, same 200 queries (`legacy200`, training-split queries), 82k versus full corpus. R@10 in percent.\n"
+        "\nCorpus size, same 200 queries (`legacy200`), the old 82k corpus versus the full corpus. R@10 in percent.\n"
     )
     out.append("| Mode | 82,326 passages | Full corpus | Change |")
     out.append("|---|---|---|---|")
@@ -113,11 +128,19 @@ def retrieval_tables(rep: dict) -> str:
                 f"| {c['label']} ({c['a']} vs {c['b']}) | {c['metric']} | {c['query_set']} | {100 * c['mean_diff']:+.1f} | "
                 f"[{100 * lo:+.1f}, {100 * hi:+.1f}] | {'yes' if c['significant'] else 'no'} |"
             )
-    hw = rep.get("hardware", {})
-    out.append(
-        f"\nMachine: {hw.get('processor', '?')}, {hw.get('cpus', '?')} logical CPUs, {hw.get('os', '?')}; single process, warm."
-    )
+    out.append("\n" + machine_line(rep.get("hardware", {})))
     return "\n".join(out)
+
+
+def machine_line(hw: dict) -> str:
+    """One sentence naming the hardware the latencies were measured on, including a GPU when one was used."""
+    base = f"Machine: {hw.get('processor', '?')}, {hw.get('cpus', '?')} logical CPUs, {hw.get('os', '?')}"
+    if hw.get("gpu"):
+        return (
+            f"{base}; encoder and reranker on a {hw['gpu']} GPU, BM25 and HNSW on the CPU; single process, warm. "
+            "These latencies describe the evaluation machine, not the served CPU deployment."
+        )
+    return f"{base}; single process, warm."
 
 
 def answers_table(rep: dict) -> str:

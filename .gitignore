@@ -23,3 +23,6 @@ dist/
 
 # evaluation checkpoints (deleted when a run completes)
 evals/.checkpoint/
+
+# per-query records are large; they live on the dataset repo under evals/
+evals/*_per_query.jsonl
