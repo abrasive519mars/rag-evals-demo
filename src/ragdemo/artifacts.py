@@ -17,21 +17,10 @@ from .config import Settings, get_settings
 from .encoder import STEncoder
 from .retrieval import BM25Index, CrossEncoderReranker, DenseIndex
 
-SERVE_PATTERNS = [
-    "manifest.json",
-    "corpus.jsonl",
-    "hnsw_ft.index",
-    "bm25.npz",
-    "bm25_vocab.json",
-    "minilm-l6-msmarco-ft/*",
-]
-EVAL_PATTERNS = [
-    "emb_ft.npy",
-    "emb_base.npy",
-    "emb_ft_int8.npy",
-    "emb_ft_int8_scale.npy",
-    "legacy/hnsw82k.index",
-]
+
+def _model_patterns(name: str) -> list[str]:
+    """A local encoder folder is fetched from the dataset repo; a Hub id (it contains a slash) is not."""
+    return [] if "/" in name else [f"{name}/*"]
 
 
 def sha256(path: Path) -> str:
@@ -57,9 +46,34 @@ class Artifacts:
             repo_id=self.s.hf_dataset_repo,
             repo_type="dataset",
             local_dir=str(self.dir),
-            allow_patterns=patterns or SERVE_PATTERNS,
+            allow_patterns=patterns or self.serve_patterns(),
             token=self.s.hf_token or None,
         )
+
+    def serve_patterns(self) -> list[str]:
+        s = self.s
+        return [
+            "manifest.json",
+            "corpus.jsonl",
+            f"hnsw_{s.encoder_tag}.index",
+            "bm25.npz",
+            "bm25_vocab.json",
+            *_model_patterns(s.encoder_name),
+        ]
+
+    def eval_patterns(self) -> list[str]:
+        s = self.s
+        return [
+            f"emb_{s.encoder_tag}.npy",
+            f"emb_{s.encoder_tag}_int8.npy",
+            f"emb_{s.encoder_tag}_int8_scale.npy",
+            f"emb_{s.alt_encoder_tag}.npy",
+            "legacy/hnsw82k.index",
+            *_model_patterns(s.alt_encoder_name),
+        ]
+
+    def emb_path(self, tag: str | None = None) -> Path:
+        return self.dir / f"emb_{tag or self.s.encoder_tag}.npy"
 
     def manifest(self) -> dict:
         path = self.dir / "manifest.json"
@@ -119,11 +133,18 @@ class Artifacts:
             yield text
 
     # ----- models and indexes ---------------------------------------------------------------
+    def _encoder(self, name: str) -> STEncoder:
+        local = self.dir / name
+        return STEncoder(str(local) if local.exists() else name, device=self.s.device)
+
     def load_encoder(self) -> STEncoder:
-        return STEncoder(str(self.dir / self.s.encoder_name), device=self.s.device)
+        return self._encoder(self.s.encoder_name)
+
+    def load_alt_encoder(self) -> STEncoder:
+        return self._encoder(self.s.alt_encoder_name)
 
     def load_dense(self) -> DenseIndex:
-        return DenseIndex.load(self.dir / "hnsw_ft.index")
+        return DenseIndex.load(self.dir / f"hnsw_{self.s.encoder_tag}.index")
 
     def load_sparse(self) -> BM25Index:
         return BM25Index.load(self.dir / "bm25.npz", self.dir / "bm25_vocab.json")
@@ -147,11 +168,11 @@ def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
 
     art = Artifacts()
+    patterns = art.serve_patterns() + (art.eval_patterns() if args.eval else [])
     if args.download:
-        art.ensure(SERVE_PATTERNS + (EVAL_PATTERNS if args.eval else []))
-    names = [n for n in SERVE_PATTERNS if "*" not in n] + ["minilm-l6-msmarco-ft/model.safetensors"]
-    if args.eval:
-        names += EVAL_PATTERNS
+        art.ensure(patterns)
+    names = [n for n in patterns if "*" not in n]
+    names += [p[:-2] + "/model.safetensors" for p in patterns if p.endswith("/*")]
     for name, status in art.verify(names).items():
         print(f"{status:9s} {name}")
     if (art.dir / "corpus.jsonl").exists():

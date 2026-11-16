@@ -81,7 +81,7 @@ Machine: x86_64, 2 logical CPUs, Linux; encoder and reranker on a Tesla T4 GPU, 
 |---|---|---|
 | Corpus | MS MARCO v1.1, all splits, deduplicated: 759,421 passages | Real Bing queries with human-labelled answer passages and human-written answers, so retrieval and answers are both gradable without writing gold by hand |
 | Sparse retrieval | BM25 stored as a documents x terms sparse matrix | Scoring is a handful of posting-list adds; same formula as `rank_bm25`, verified by test |
-| Dense retrieval | MiniLM-L6 fine-tuned on MS MARCO hard negatives, 384-d, FAISS HNSW | Small enough for CPU serving; the base model is kept as a row so the fine-tuning gain is a number |
+| Dense retrieval | Stock `all-MiniLM-L6-v2`, 384-d, FAISS HNSW at efSearch 128 | Small enough for CPU serving; the earlier 5,000-pair fine-tune of the same model is kept as a comparison row, and the table shows it lost |
 | Fusion | Reciprocal rank fusion, k = 60 | Ranks only, so sparse and dense scores never need calibrating |
 | Rerank | `cross-encoder/ms-marco-MiniLM-L-6-v2` over the fused top 50 | Joint (query, passage) scoring where it is affordable: on 50 candidates, not 759k |
 | Generation | Gemini 3.5 Flash, temperature 0, cite every claim as `[n]`, fixed refusal string | Citations are resolved server-side; unresolved markers are counted; refusals are measurable |

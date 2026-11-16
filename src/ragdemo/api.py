@@ -63,10 +63,10 @@ class AppState:
 
 def _load_real(state: AppState) -> None:
     try:
-        from .artifacts import SERVE_PATTERNS, Artifacts
+        from .artifacts import Artifacts
 
         art = Artifacts(state.settings)
-        art.ensure(SERVE_PATTERNS)
+        art.ensure(art.serve_patterns())
         encoder, dense, sparse = art.load_encoder(), art.load_dense(), art.load_sparse()
         dense.set_ef_search(state.settings.ef_search)
         reranker = art.load_reranker()

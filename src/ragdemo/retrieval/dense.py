@@ -77,6 +77,30 @@ class Int8Index:
         order = top[np.argsort(-scores[top])][:k]
         return [Hit(int(i), float(scores[i])) for i in order]
 
+    def search_batch(self, query_vecs: np.ndarray, k: int, rescore: int = 0) -> list[list[Hit]]:
+        """Score many queries per pass over the matrix: each int8 chunk is converted once per batch of
+        queries instead of once per query, which is what makes an evaluation over 1,000 queries tractable."""
+        n = max(k, rescore)
+        out: list[list[Hit]] = []
+        for lo_q in range(0, len(query_vecs), 128):
+            qv = query_vecs[lo_q : lo_q + 128].astype(np.float32)
+            qs = (qv * self._scale).T  # (d, b)
+            scores = np.empty((len(self._q), qs.shape[1]), dtype=np.float32)
+            for lo in range(0, len(self._q), 100_000):
+                scores[lo : lo + 100_000] = self._q[lo : lo + 100_000].astype(np.float32) @ qs
+            for j in range(qs.shape[1]):
+                col = scores[:, j]
+                top = np.argpartition(-col, n)[:n] if n < len(col) else np.arange(len(col))
+                if rescore and self._full is not None:
+                    top_sorted = np.sort(top)
+                    exact = self._full[top_sorted] @ qv[j]
+                    order = np.argsort(-exact)[:k]
+                    out.append([Hit(int(top_sorted[i]), float(exact[i])) for i in order])
+                else:
+                    order = top[np.argsort(-col[top])][:k]
+                    out.append([Hit(int(i), float(col[i])) for i in order])
+        return out
+
     def _chunked_scores(self, qs: np.ndarray) -> np.ndarray:
         out = np.empty(len(self._q), dtype=np.float32)
         step = 200_000

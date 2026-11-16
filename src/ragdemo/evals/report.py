@@ -20,6 +20,10 @@ def _ms(row: dict, stage: str = "total") -> str:
     return f"{lat['p50']:.1f}" if lat["p50"] < 10 else f"{lat['p50']:.0f}"
 
 
+def _short(model_name: str) -> str:
+    return model_name.rsplit("/", 1)[-1] if model_name else "?"
+
+
 def _find(rows: list[dict], name: str, query_set: str) -> dict | None:
     return next((r for r in rows if r["name"] == name and r["query_set"] == query_set), None)
 
@@ -33,11 +37,12 @@ def retrieval_tables(rep: dict) -> str:
     )
     out.append("| Configuration | R@1 | R@5 | R@10 | R@20 | MRR@10 | nDCG@10 | p50 ms |")
     out.append("|---|---|---|---|---|---|---|---|")
+    enc, alt = _short(rep.get("encoder", "")), _short(rep.get("alt_encoder", ""))
     order = [
         ("bm25", "BM25 (sparse matrix)"),
-        ("dense_base", "Dense, base MiniLM, exact"),
-        ("dense_flat", "Dense, fine-tuned MiniLM, exact"),
-        ("dense", "Dense, fine-tuned MiniLM, HNSW (served)"),
+        ("dense_flat", f"Dense, {enc}, exact"),
+        ("dense", f"Dense, {enc}, HNSW efSearch {rep.get('ef_search', '?')} (served)"),
+        ("dense_alt_flat", f"Dense, {alt}, exact (comparison)"),
         ("hybrid", "Hybrid (RRF of BM25 and dense)"),
         ("hybrid_rerank", "Hybrid + cross-encoder rerank (depth 50)"),
     ]
@@ -53,16 +58,16 @@ def retrieval_tables(rep: dict) -> str:
         )
 
     enc_rows = [
-        (_find(rows, n, qs), qs) for n in ("dense_flat", "dense_base") for qs in ("val1000", "legacy200")
+        _find(rows, n, qs) for n in ("dense_flat", "dense_alt_flat") for qs in ("val1000", "legacy200")
     ]
-    if all(r for r, _ in enc_rows):
+    if all(enc_rows):
         out.append(
-            "\nEncoder comparison, exact search, R@10 in percent. The fine-tuned model was trained from the base "
-            "model on 5,000 MS MARCO pairs; `legacy200` queries come from that training split.\n"
+            "\nEncoder comparison, exact search, R@10 in percent. The comparison model is the served model fine-tuned "
+            "on 5,000 MS MARCO pairs; `legacy200` queries come from that training split.\n"
         )
         out.append("| Encoder | val1000 (held out) | legacy200 (training queries) |")
         out.append("|---|---|---|")
-        for name, label in (("dense_base", "Base all-MiniLM-L6-v2"), ("dense_flat", "Fine-tuned MiniLM")):
+        for name, label in (("dense_flat", enc), ("dense_alt_flat", alt)):
             a, b = _find(rows, name, "val1000"), _find(rows, name, "legacy200")
             out.append(f"| {label} | {_pct(a['metrics']['recall@10'])} | {_pct(b['metrics']['recall@10'])} |")
 
@@ -73,8 +78,7 @@ def retrieval_tables(rep: dict) -> str:
     out.append("|---|---|---|---|")
     for small, big, label in (
         ("bm25_82k", "bm25", "BM25"),
-        ("dense_82k", "dense", "Dense"),
-        ("hybrid_82k", "hybrid", "Hybrid"),
+        ("dense_82k", "dense_alt_flat", f"Dense, {alt}"),
     ):
         a, b = _find(rows, small, "legacy200"), _find(rows, big, "legacy200")
         if a and b:

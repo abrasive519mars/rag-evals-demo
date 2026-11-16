@@ -78,12 +78,12 @@ volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True, version=2)
 @app.function(image=image, volumes={"/data": volume}, memory=2048, timeout=3600)
 def download_artifacts() -> None:
     """Fill the Volume once: corpus, HNSW index, BM25 matrix, encoder, verified against the manifest."""
-    from ragdemo.artifacts import SERVE_PATTERNS, Artifacts
+    from ragdemo.artifacts import Artifacts
 
     art = Artifacts()
-    art.ensure(SERVE_PATTERNS)
-    names = [n for n in SERVE_PATTERNS if "*" not in n] + ["minilm-l6-msmarco-ft/model.safetensors"]
-    for name, status in art.verify(names).items():
+    patterns = art.serve_patterns()
+    art.ensure(patterns)
+    for name, status in art.verify([n for n in patterns if "*" not in n]).items():
         print(f"{status:9s} {name}", flush=True)
     volume.commit()
     print(f"corpus passages: {art.corpus_size():,}", flush=True)

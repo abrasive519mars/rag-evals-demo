@@ -19,9 +19,9 @@ from pathlib import Path
 import numpy as np
 
 from ..artifacts import Artifacts
-from ..encoder import Encoder, STEncoder
+from ..encoder import Encoder
 from ..pipeline import RetrievalConfig, Retriever
-from ..retrieval import BM25Index, DenseIndex, Hit, Int8Index, rrf
+from ..retrieval import BM25Index, DenseIndex, Hit, Int8Index
 from .metrics import gold_rank, mean_metrics, paired_bootstrap, per_query_metrics, percentiles
 
 EVAL_TOP = 20  # metrics are computed up to recall@20, so every row keeps at least 20 hits
@@ -40,15 +40,34 @@ class Row:
 
 
 COMPARISONS = [
-    ("dense", "dense_base", "recall@10", "val1000", "fine-tuning gain"),
+    (
+        "dense_flat",
+        "dense_alt_flat",
+        "recall@10",
+        "val1000",
+        "served vs comparison encoder, held-out queries",
+    ),
+    (
+        "dense_flat",
+        "dense_alt_flat",
+        "recall@10",
+        "legacy200",
+        "served vs comparison encoder, training queries",
+    ),
     ("hybrid", "dense", "recall@10", "val1000", "fusion recall gain"),
     ("hybrid", "dense", "mrr@10", "val1000", "fusion MRR change"),
     ("hybrid_rerank", "hybrid", "mrr@10", "val1000", "reranker MRR change"),
     ("hybrid_rerank", "hybrid", "recall@5", "val1000", "reranker recall@5 change"),
     ("dense", "dense_flat", "recall@10", "val1000", "HNSW approximation loss"),
     ("dense_int8_rescore200", "dense_flat", "recall@10", "val1000", "int8 quantisation loss"),
-    ("dense", "dense_82k", "recall@10", "legacy200", "corpus-size effect, dense"),
-    ("hybrid", "hybrid_82k", "recall@10", "legacy200", "corpus-size effect, hybrid"),
+    (
+        "dense_alt_flat",
+        "dense_82k",
+        "recall@10",
+        "legacy200",
+        "corpus-size effect, dense (comparison encoder)",
+    ),
+    ("bm25", "bm25_82k", "recall@10", "legacy200", "corpus-size effect, BM25"),
 ]
 
 
@@ -137,14 +156,13 @@ def eval_int8(
     row = Row(
         name=name, query_set=query_set, description=f"int8 vectors, exact search, rescore top {rescore}"
     )
-    lat: list[float] = []
-    for q in queries:
-        vec = encoder.encode_query(q["query"])
-        t0 = time.perf_counter()
-        hits = index.search(vec, EVAL_TOP, rescore=rescore)
-        lat.append((time.perf_counter() - t0) * 1000)
+    vecs = encoder.encode_batch([q["query"] for q in queries])
+    t0 = time.perf_counter()
+    batches = index.search_batch(vecs, EVAL_TOP, rescore=rescore)
+    per_query_ms = (time.perf_counter() - t0) * 1000 / max(len(queries), 1)
+    for q, hits in zip(queries, batches, strict=True):
         row.per_query.append(_record(q, hits, None))
-    return _finish(row, {"dense": lat})
+    return _finish(row, {"dense_batch_avg": [per_query_ms] * len(queries)})
 
 
 def eval_ef(hnsw: DenseIndex, vecs: np.ndarray, queries: list[dict], query_set: str, ef: int) -> Row:
@@ -169,7 +187,7 @@ def eval_ef_sweep(
 
 
 def eval_82k(art: Artifacts, encoder: Encoder, queries: list[dict]) -> list[Row]:
-    """The legacy 82k index and a BM25 built over the same 82,326 rows, on the legacy200 queries."""
+    """The legacy 82k index (built with the comparison encoder) and a BM25 over the same 82,326 rows."""
     legacy = DenseIndex.load(art.dir / "legacy" / "hnsw82k.index")
     legacy.set_ef_search(64)
     n82k = legacy.ntotal
@@ -178,7 +196,7 @@ def eval_82k(art: Artifacts, encoder: Encoder, queries: list[dict]) -> list[Row]
     rows = [
         eval_dense_matrix(
             "dense_82k",
-            f"fine-tuned encoder, legacy HNSW over {n82k:,} passages",
+            f"{encoder_label(art.s.alt_encoder_name)}, legacy HNSW over {n82k:,} passages",
             encoder,
             legacy,
             queries,
@@ -186,15 +204,15 @@ def eval_82k(art: Artifacts, encoder: Encoder, queries: list[dict]) -> list[Row]
         )
     ]
     row_b = Row(name="bm25_82k", query_set="legacy200", description=f"BM25 over {n82k:,} passages")
-    row_h = Row(name="hybrid_82k", query_set="legacy200", description="RRF of bm25_82k and dense_82k")
-    vecs = encoder.encode_batch([q["query"] for q in queries])
-    for q, vec in zip(queries, vecs, strict=True):
-        sparse_hits = bm25_82k.search(q["query"], 50)
-        dense_hits = legacy.search(vec, 50)
-        row_b.per_query.append(_record(q, sparse_hits, None))
-        row_h.per_query.append(_record(q, rrf([sparse_hits, dense_hits]), None))
-    rows += [_finish(row_b, {}), _finish(row_h, {})]
+    for q in queries:
+        row_b.per_query.append(_record(q, bm25_82k.search(q["query"], EVAL_TOP), None))
+    rows.append(_finish(row_b, {}))
     return rows
+
+
+def encoder_label(name: str) -> str:
+    """`sentence-transformers/all-MiniLM-L6-v2` -> `all-MiniLM-L6-v2`; a local folder name stays as is."""
+    return name.rsplit("/", 1)[-1]
 
 
 # ----- checkpoints: one file per finished row, so a killed run loses at most the row in progress ----------
@@ -242,7 +260,7 @@ def _phase_served(
     art: Artifacts, out_dir: Path, sets: dict[str, list[dict]], encoder: Encoder, with_rerank: bool
 ) -> tuple[list[Row], str | None]:
     """Every row that goes through the served pipeline, plus the efSearch sweep on the same index. The HNSW
-    index (1.4 GB), the BM25 matrix (0.3 GB) and the reranker are local here, so they are freed on return."""
+    index (1.2 GB), the BM25 matrix (0.3 GB) and the reranker are local here, so they are freed on return."""
     val = sets["val1000"]
     hnsw, sparse = art.load_dense(), art.load_sparse()
     reranker = art.load_reranker() if with_rerank else None
@@ -274,42 +292,44 @@ def _phase_served(
 def _phase_matrices(
     art: Artifacts, out_dir: Path, sets: dict[str, list[dict]], encoder: Encoder
 ) -> list[Row]:
-    """Exact and int8 search over the fine-tuned matrix, then the base encoder over its own matrix. Each
-    flat index (1.2 GB) is built inside its row function, so only one exists at a time."""
-    val = sets["val1000"]
+    """Exact and int8 search over the served matrix on both query sets, then exact search with the comparison
+    encoder. Each flat index (1.2 GB) is built inside its row function, so only one exists at a time."""
     s = art.s
-    emb_ft = np.load(art.dir / "emb_ft.npy", mmap_mode="r")
+    served, alt = encoder_label(s.encoder_name), encoder_label(s.alt_encoder_name)
+    emb = np.load(art.emb_path(), mmap_mode="r")
+    rows: list[Row] = []
 
-    def flat_row() -> Row:
-        flat = DenseIndex.flat(np.asarray(emb_ft))
-        return eval_dense_matrix(
-            "dense_flat", "fine-tuned encoder, exact search", encoder, flat, val, "val1000"
-        )
+    for qs in ("val1000", "legacy200"):
 
-    rows = [_one(out_dir, sets, "dense_flat", "val1000", flat_row)]
-    q8 = np.load(art.dir / "emb_ft_int8.npy", mmap_mode="r")
-    scale = np.load(art.dir / "emb_ft_int8_scale.npy")
+        def flat_row(q: str = qs) -> Row:
+            flat = DenseIndex.flat(np.asarray(emb))
+            return eval_dense_matrix("dense_flat", f"{served}, exact search", encoder, flat, sets[q], q)
+
+        rows.append(_one(out_dir, sets, "dense_flat", qs, flat_row))
+
+    q8 = np.load(art.dir / f"emb_{s.encoder_tag}_int8.npy", mmap_mode="r")
+    scale = np.load(art.dir / f"emb_{s.encoder_tag}_int8_scale.npy")
     for rescore in (0, 50, 200):
 
         def int8_row(r: int = rescore) -> Row:
-            return eval_int8(encoder, np.asarray(q8), scale, emb_ft, val, "val1000", r)
+            return eval_int8(encoder, np.asarray(q8), scale, emb, sets["val1000"], "val1000", r)
 
         name = f"dense_int8_rescore{rescore}" if rescore else "dense_int8"
         rows.append(_one(out_dir, sets, name, "val1000", int8_row))
 
-    if not (art.dir / "emb_base.npy").exists():
-        print("  emb_base.npy missing: skipping the dense_base row", flush=True)
+    alt_path = art.emb_path(s.alt_encoder_tag)
+    if not alt_path.exists():
+        print(f"  {alt_path.name} missing: skipping the comparison-encoder rows", flush=True)
         return rows
+    alt_encoder = art.load_alt_encoder()
+    emb_alt = np.load(alt_path, mmap_mode="r")
+    for qs in ("val1000", "legacy200"):
 
-    def base_row() -> Row:
-        emb_base = np.load(art.dir / "emb_base.npy", mmap_mode="r")
-        flat = DenseIndex.flat(np.asarray(emb_base))
-        enc = STEncoder(s.base_encoder_name, device=s.device)
-        return eval_dense_matrix(
-            "dense_base", "base all-MiniLM-L6-v2, exact search", enc, flat, val, "val1000"
-        )
+        def alt_row(q: str = qs) -> Row:
+            flat = DenseIndex.flat(np.asarray(emb_alt))
+            return eval_dense_matrix("dense_alt_flat", f"{alt}, exact search", alt_encoder, flat, sets[q], q)
 
-    rows.append(_one(out_dir, sets, "dense_base", "val1000", base_row))
+        rows.append(_one(out_dir, sets, "dense_alt_flat", qs, alt_row))
     return rows
 
 
@@ -330,8 +350,15 @@ def run(art: Artifacts, out_dir: Path, query_limit: int | None = None, with_rera
     gc.collect()
     rows += _phase_matrices(art, out_dir, sets, encoder)
     gc.collect()
-    names_82k = ["dense_82k", "bm25_82k", "hybrid_82k"]
-    rows += cached_rows(out_dir, names_82k, "legacy200", len(legacy), lambda: eval_82k(art, encoder, legacy))
+    if (art.dir / "legacy" / "hnsw82k.index").exists():
+        alt_encoder = art.load_alt_encoder()
+        rows += cached_rows(
+            out_dir,
+            ["dense_82k", "bm25_82k"],
+            "legacy200",
+            len(legacy),
+            lambda: eval_82k(art, alt_encoder, legacy),
+        )
 
     by_key = {(r.name, r.query_set): r for r in rows}
     comparisons = []
@@ -347,6 +374,8 @@ def run(art: Artifacts, out_dir: Path, query_limit: int | None = None, with_rera
         "corpus_size": art.corpus_size(),
         "hardware": _hardware(s.device),
         "encoder": s.encoder_name,
+        "alt_encoder": s.alt_encoder_name,
+        "ef_search": s.ef_search,
         "reranker": reranker_name,
         "rows": [{k: v for k, v in asdict(r).items() if k != "per_query"} for r in rows],
         "comparisons": comparisons,
@@ -357,4 +386,6 @@ def run(art: Artifacts, out_dir: Path, query_limit: int | None = None, with_rera
             for rec in r.per_query:
                 f.write(json.dumps({"row": r.name, "query_set": r.query_set, **rec}) + "\n")
     shutil.rmtree(out_dir / ".checkpoint" / "retrieval", ignore_errors=True)
+    if (out_dir / ".checkpoint").is_dir() and not any((out_dir / ".checkpoint").iterdir()):
+        (out_dir / ".checkpoint").rmdir()
     return report

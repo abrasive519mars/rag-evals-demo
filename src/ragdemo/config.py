@@ -24,8 +24,11 @@ class Settings(BaseSettings):
     eval_dir: Path = Path("data/eval")
 
     # models
-    encoder_name: str = "minilm-l6-msmarco-ft"  # folder inside artifacts_dir
-    base_encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    # the served encoder and the one kept for comparison: a Hub id, or a folder inside artifacts_dir
+    encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    encoder_tag: str = "base"  # artifact suffix: hnsw_<tag>.index, emb_<tag>.npy, emb_<tag>_int8*.npy
+    alt_encoder_name: str = "minilm-l6-msmarco-ft"  # the earlier 5k-pair fine-tune; evaluation only
+    alt_encoder_tag: str = "ft"
     reranker_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     device: str = "cpu"  # "cuda" for the offline evaluation on a Colab GPU; the Space serves on CPU
     torch_threads: int = 0  # 0 keeps the torch default; 12 beat 16 by 30% on the hybrid-core build laptop
@@ -39,7 +42,7 @@ class Settings(BaseSettings):
     k_candidates: int = 50
     k_final: int = 5
     rerank_depth: int = 50
-    ef_search: int = 64
+    ef_search: int = 128  # the sweep: 64 loses 2.4 points to exact, 128 loses 1.4 at 0.7 ms
     rrf_k: int = 60
 
     # serving
