@@ -5,7 +5,7 @@ One-time setup, from the repository root:
     pip install modal
     modal setup                                               # opens the browser once
     modal secret create rag-evals-demo GEMINI_API_KEY=<key>   # the generator key, never in git
-    modal run deploy/modal_app.py                             # once: fills the Volume with the serving artifacts
+    modal run deploy/modal_app.py                             # once: fills the Volume with the artifacts
 
 Deploy (and redeploy after every code change):
 
