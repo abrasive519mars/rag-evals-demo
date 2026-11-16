@@ -120,7 +120,7 @@ class Artifacts:
 
     # ----- models and indexes ---------------------------------------------------------------
     def load_encoder(self) -> STEncoder:
-        return STEncoder(str(self.dir / self.s.encoder_name))
+        return STEncoder(str(self.dir / self.s.encoder_name), device=self.s.device)
 
     def load_dense(self) -> DenseIndex:
         return DenseIndex.load(self.dir / "hnsw_ft.index")
@@ -129,7 +129,7 @@ class Artifacts:
         return BM25Index.load(self.dir / "bm25.npz", self.dir / "bm25_vocab.json")
 
     def load_reranker(self) -> CrossEncoderReranker:
-        return CrossEncoderReranker(self.s.reranker_name)
+        return CrossEncoderReranker(self.s.reranker_name, device=self.s.device)
 
     # ----- evaluation data -------------------------------------------------------------------
     def load_queries(self, set_name: str | None = None) -> list[dict]:

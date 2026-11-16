@@ -14,18 +14,19 @@ class Reranker(Protocol):
 
 
 class CrossEncoderReranker:
-    """Lazy-loads a sentence-transformers CrossEncoder on first use (CPU)."""
+    """Lazy-loads a sentence-transformers CrossEncoder on first use (CPU unless a device is given)."""
 
-    def __init__(self, model_name: str, batch_size: int = 32):
+    def __init__(self, model_name: str, batch_size: int = 32, device: str = "cpu"):
         self.name = model_name
         self._batch = batch_size
+        self._device = device
         self._model = None
 
     def _load(self):
         if self._model is None:
             from sentence_transformers import CrossEncoder
 
-            self._model = CrossEncoder(self.name, device="cpu")
+            self._model = CrossEncoder(self.name, device=self._device)
         return self._model
 
     def rerank(self, query: str, candidates: list[tuple[int, str]], top_n: int) -> list[Hit]:

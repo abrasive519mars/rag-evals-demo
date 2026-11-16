@@ -1,6 +1,6 @@
 """Create or update the Hugging Face Space and upload the serving code.
 
-  python scripts/deploy_space.py                       # private Space; HF_TOKEN and GEMINI_API_KEY from env or .env
+  python scripts/deploy_space.py                       # private Space; keys from the environment or .env
   python scripts/deploy_space.py --visibility public    # flip it public once the evaluation tables are in
 
 The Space builds from the Dockerfile. The GitHub README is replaced by deploy/space_README.md, which

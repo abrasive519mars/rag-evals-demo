@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     encoder_name: str = "minilm-l6-msmarco-ft"  # folder inside artifacts_dir
     base_encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2"
     reranker_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    device: str = "cpu"  # "cuda" for the offline evaluation on a Colab GPU; the Space serves on CPU
     torch_threads: int = 0  # 0 keeps the torch default; 12 beat 16 by 30% on the hybrid-core build laptop
     gen_model: str = (
         "gemini-3.5-flash"  # 2.5 Flash is closed to new keys; 3.8 and 3.7 were overloaded at build time

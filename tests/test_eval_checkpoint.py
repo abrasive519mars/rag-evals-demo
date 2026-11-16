@@ -1,4 +1,4 @@
-"""The retrieval evaluation checkpoints each finished row; a rerun reuses it only for the same query count."""
+"""The retrieval eval checkpoints each finished row; a rerun reuses it only for the same query count."""
 
 from ragdemo.evals.retrieval import Row, cached_rows
 

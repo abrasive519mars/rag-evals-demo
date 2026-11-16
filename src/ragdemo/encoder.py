@@ -17,10 +17,10 @@ class Encoder(Protocol):
 
 
 class STEncoder:
-    def __init__(self, model_path: str, max_seq_length: int = 256):
+    def __init__(self, model_path: str, max_seq_length: int = 256, device: str = "cpu"):
         from sentence_transformers import SentenceTransformer
 
-        self._model = SentenceTransformer(model_path, device="cpu")
+        self._model = SentenceTransformer(model_path, device=device)
         self._model.max_seq_length = max_seq_length
         self.dim = int(self._model.get_sentence_embedding_dimension())
 

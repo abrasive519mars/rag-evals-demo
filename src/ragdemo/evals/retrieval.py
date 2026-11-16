@@ -52,14 +52,17 @@ COMPARISONS = [
 ]
 
 
-def _hardware() -> dict:
+def _hardware(device: str = "cpu") -> dict:
     import torch
 
+    gpu = torch.cuda.get_device_name(0) if device.startswith("cuda") and torch.cuda.is_available() else None
     return {
         "machine": platform.machine(),
         "processor": platform.processor(),
         "cpus": os.cpu_count(),
         "torch_threads": torch.get_num_threads(),
+        "device": device,
+        "gpu": gpu,
         "os": platform.system(),
     }
 
@@ -301,7 +304,7 @@ def _phase_matrices(
     def base_row() -> Row:
         emb_base = np.load(art.dir / "emb_base.npy", mmap_mode="r")
         flat = DenseIndex.flat(np.asarray(emb_base))
-        enc = STEncoder(s.base_encoder_name)
+        enc = STEncoder(s.base_encoder_name, device=s.device)
         return eval_dense_matrix(
             "dense_base", "base all-MiniLM-L6-v2, exact search", enc, flat, val, "val1000"
         )
@@ -342,7 +345,7 @@ def run(art: Artifacts, out_dir: Path, query_limit: int | None = None, with_rera
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "elapsed_s": round(time.time() - t_all),
         "corpus_size": art.corpus_size(),
-        "hardware": _hardware(),
+        "hardware": _hardware(s.device),
         "encoder": s.encoder_name,
         "reranker": reranker_name,
         "rows": [{k: v for k, v in asdict(r).items() if k != "per_query"} for r in rows],
