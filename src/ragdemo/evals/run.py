@@ -36,6 +36,20 @@ def pick_judge(s, choice: str):
     return GeminiJudge(s.gemini_api_key, s.judge_fallback_model)
 
 
+def _quiet_model_loading() -> None:
+    """Keep the run log to one line per row: no download or weight-loading progress bars."""
+    from huggingface_hub.utils import disable_progress_bars
+
+    disable_progress_bars()
+    try:
+        from transformers.utils import logging as hf_logging
+
+        hf_logging.disable_progress_bar()
+        hf_logging.set_verbosity_error()
+    except ImportError:
+        pass
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--retrieval", action="store_true")
@@ -48,8 +62,13 @@ def main() -> None:
     p.add_argument("--out", default="evals")
     args = p.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
+    _quiet_model_loading()
 
     s = get_settings()
+    if s.torch_threads:
+        import torch
+
+        torch.set_num_threads(s.torch_threads)
     art = Artifacts(s)
     out = Path(args.out)
 

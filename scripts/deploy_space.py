@@ -1,6 +1,7 @@
 """Create or update the Hugging Face Space and upload the serving code.
 
-  python scripts/deploy_space.py            # uses HF_TOKEN and GEMINI_API_KEY from the environment or .env
+  python scripts/deploy_space.py                       # private Space; HF_TOKEN and GEMINI_API_KEY from env or .env
+  python scripts/deploy_space.py --visibility public    # flip it public once the evaluation tables are in
 
 The Space builds from the Dockerfile. The GitHub README is replaced by deploy/space_README.md, which
 carries the Space front matter and links back to GitHub for the full write-up.
@@ -19,6 +20,7 @@ IGNORE = [
     ".git/*",
     ".github/*",
     "data/*",
+    "evals/.checkpoint/*",
     "docs/*",
     "tests/*",
     "scripts/*",
@@ -40,6 +42,7 @@ def main() -> None:
     p.add_argument("--repo", default="abrasive519mars/rag-evals-demo")
     p.add_argument("--root", default=".")
     p.add_argument("--no-secrets", action="store_true")
+    p.add_argument("--visibility", choices=["private", "public"], default="private")
     args = p.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -51,8 +54,10 @@ def main() -> None:
     if not token:
         raise SystemExit("HF_TOKEN missing")
     api = HfApi(token=token)
-    url = api.create_repo(args.repo, repo_type="space", space_sdk="docker", private=False, exist_ok=True)
-    print("space:", url)
+    private = args.visibility == "private"
+    url = api.create_repo(args.repo, repo_type="space", space_sdk="docker", private=private, exist_ok=True)
+    api.update_repo_settings(repo_id=args.repo, repo_type="space", private=private)
+    print(f"space: {url} ({args.visibility})")
 
     if not args.no_secrets:
         gemini = (

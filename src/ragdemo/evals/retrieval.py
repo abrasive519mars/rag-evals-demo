@@ -7,9 +7,11 @@ computed for the comparisons named in COMPARISONS.
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 import platform
+import shutil
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -51,10 +53,13 @@ COMPARISONS = [
 
 
 def _hardware() -> dict:
+    import torch
+
     return {
         "machine": platform.machine(),
         "processor": platform.processor(),
         "cpus": os.cpu_count(),
+        "torch_threads": torch.get_num_threads(),
         "os": platform.system(),
     }
 
@@ -139,27 +144,25 @@ def eval_int8(
     return _finish(row, {"dense": lat})
 
 
+def eval_ef(hnsw: DenseIndex, vecs: np.ndarray, queries: list[dict], query_set: str, ef: int) -> Row:
+    hnsw.set_ef_search(ef)
+    row = Row(
+        name=f"dense_ef{ef}", query_set=query_set, description=f"HNSW efSearch={ef}", config={"ef_search": ef}
+    )
+    lat: list[float] = []
+    for q, vec in zip(queries, vecs, strict=True):
+        t0 = time.perf_counter()
+        hits = hnsw.search(vec, EVAL_TOP)
+        lat.append((time.perf_counter() - t0) * 1000)
+        row.per_query.append(_record(q, hits, None))
+    return _finish(row, {"dense": lat})
+
+
 def eval_ef_sweep(
     encoder: Encoder, hnsw: DenseIndex, queries: list[dict], query_set: str, efs: list[int]
 ) -> list[Row]:
-    rows = []
     vecs = encoder.encode_batch([q["query"] for q in queries])
-    for ef in efs:
-        hnsw.set_ef_search(ef)
-        row = Row(
-            name=f"dense_ef{ef}",
-            query_set=query_set,
-            description=f"HNSW efSearch={ef}",
-            config={"ef_search": ef},
-        )
-        lat: list[float] = []
-        for q, vec in zip(queries, vecs, strict=True):
-            t0 = time.perf_counter()
-            hits = hnsw.search(vec, EVAL_TOP)
-            lat.append((time.perf_counter() - t0) * 1000)
-            row.per_query.append(_record(q, hits, None))
-        rows.append(_finish(row, {"dense": lat}))
-    return rows
+    return [eval_ef(hnsw, vecs, queries, query_set, ef) for ef in efs]
 
 
 def eval_82k(art: Artifacts, encoder: Encoder, queries: list[dict]) -> list[Row]:
@@ -191,57 +194,141 @@ def eval_82k(art: Artifacts, encoder: Encoder, queries: list[dict]) -> list[Row]
     return rows
 
 
-# ----- orchestration ---------------------------------------------------------------------------------------
-def run(art: Artifacts, out_dir: Path, query_limit: int | None = None, with_rerank: bool = True) -> dict:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    s = art.s
-    val = art.load_queries("val1000")[:query_limit]
-    legacy = art.load_queries("legacy200")[:query_limit]
+# ----- checkpoints: one file per finished row, so a killed run loses at most the row in progress ----------
+def _checkpoint_path(out_dir: Path, name: str, query_set: str) -> Path:
+    return out_dir / ".checkpoint" / "retrieval" / f"{name}__{query_set}.json"
 
-    encoder = art.load_encoder()
-    hnsw = art.load_dense()
-    sparse = art.load_sparse()
+
+def _load_row(path: Path, n_expected: int) -> Row | None:
+    if not path.exists():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return Row(**data) if data.get("n") == n_expected else None
+
+
+def _report_row(row: Row, note: str) -> None:
+    r10 = row.metrics.get("recall@10", 0.0)
+    print(f"  {row.name:28s} {row.query_set:9s} recall@10={r10:.3f}  {note}", flush=True)
+
+
+def cached_rows(out_dir: Path, names: list[str], query_set: str, n_expected: int, compute) -> list[Row]:
+    """Return the named rows from the checkpoint folder when every one is there with the expected query
+    count; otherwise compute them all, save each and print one progress line per row."""
+    cached = [_load_row(_checkpoint_path(out_dir, n, query_set), n_expected) for n in names]
+    if all(r is not None for r in cached):
+        for r in cached:
+            _report_row(r, "(checkpoint)")
+        return cached
+    t0 = time.time()
+    rows = compute()
+    assert [r.name for r in rows] == names, f"computed {[r.name for r in rows]}, expected {names}"
+    for r in rows:
+        path = _checkpoint_path(out_dir, r.name, r.query_set)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(asdict(r)), encoding="utf-8")
+        _report_row(r, f"{time.time() - t0:5.0f} s")
+    return rows
+
+
+# ----- orchestration ---------------------------------------------------------------------------------------
+def _one(out_dir: Path, sets: dict[str, list[dict]], name: str, qs: str, compute) -> Row:
+    return cached_rows(out_dir, [name], qs, len(sets[qs]), lambda: [compute()])[0]
+
+
+def _phase_served(
+    art: Artifacts, out_dir: Path, sets: dict[str, list[dict]], encoder: Encoder, with_rerank: bool
+) -> tuple[list[Row], str | None]:
+    """Every row that goes through the served pipeline, plus the efSearch sweep on the same index. The HNSW
+    index (1.4 GB), the BM25 matrix (0.3 GB) and the reranker are local here, so they are freed on return."""
+    val = sets["val1000"]
+    hnsw, sparse = art.load_dense(), art.load_sparse()
     reranker = art.load_reranker() if with_rerank else None
     retriever = Retriever(encoder, hnsw, sparse, art.texts, reranker=reranker)
-
     rows: list[Row] = []
-    t_all = time.time()
-    for mode in ("bm25", "dense", "hybrid") + (("hybrid_rerank",) if with_rerank else ()):
-        for qs_name, qs in (("val1000", val), ("legacy200", legacy)):
-            rows.append(eval_served(retriever, qs, qs_name, mode))
-            print(f"  {mode:14s} {qs_name:9s} recall@10={rows[-1].metrics['recall@10']:.3f}", flush=True)
+    modes = ("bm25", "dense", "hybrid") + (("hybrid_rerank",) if with_rerank else ())
+    for mode in modes:
+        for qs in ("val1000", "legacy200"):
+            rows.append(
+                _one(out_dir, sets, mode, qs, lambda m=mode, q=qs: eval_served(retriever, sets[q], q, m))
+            )
     if with_rerank:
         for depth in (20, 100):
-            rows.append(eval_served(retriever, val, "val1000", "hybrid_rerank", rerank_depth=depth))
 
+            def depth_row(d: int = depth) -> Row:
+                return eval_served(retriever, val, "val1000", "hybrid_rerank", rerank_depth=d)
+
+            rows.append(_one(out_dir, sets, f"hybrid_rerank_rerank_depth{depth}", "val1000", depth_row))
+    vecs = encoder.encode_batch([q["query"] for q in val])
+    for ef in (16, 32, 64, 128, 256):
+        rows.append(
+            _one(
+                out_dir, sets, f"dense_ef{ef}", "val1000", lambda e=ef: eval_ef(hnsw, vecs, val, "val1000", e)
+            )
+        )
+    return rows, (reranker.name if reranker else None)
+
+
+def _phase_matrices(
+    art: Artifacts, out_dir: Path, sets: dict[str, list[dict]], encoder: Encoder
+) -> list[Row]:
+    """Exact and int8 search over the fine-tuned matrix, then the base encoder over its own matrix. Each
+    flat index (1.2 GB) is built inside its row function, so only one exists at a time."""
+    val = sets["val1000"]
+    s = art.s
     emb_ft = np.load(art.dir / "emb_ft.npy", mmap_mode="r")
-    flat = DenseIndex.flat(np.asarray(emb_ft))
-    rows.append(
-        eval_dense_matrix("dense_flat", "fine-tuned encoder, exact search", encoder, flat, val, "val1000")
-    )
-    rows += eval_ef_sweep(encoder, hnsw, val, "val1000", [16, 32, 64, 128, 256])
-    hnsw.set_ef_search(s.ef_search)
 
+    def flat_row() -> Row:
+        flat = DenseIndex.flat(np.asarray(emb_ft))
+        return eval_dense_matrix(
+            "dense_flat", "fine-tuned encoder, exact search", encoder, flat, val, "val1000"
+        )
+
+    rows = [_one(out_dir, sets, "dense_flat", "val1000", flat_row)]
     q8 = np.load(art.dir / "emb_ft_int8.npy", mmap_mode="r")
     scale = np.load(art.dir / "emb_ft_int8_scale.npy")
     for rescore in (0, 50, 200):
-        rows.append(eval_int8(encoder, np.asarray(q8), scale, emb_ft, val, "val1000", rescore))
-    del flat
 
-    if (art.dir / "emb_base.npy").exists():
-        base_enc = STEncoder(s.base_encoder_name)
-        emb_base = np.load(art.dir / "emb_base.npy", mmap_mode="r")
-        base_flat = DenseIndex.flat(np.asarray(emb_base))
-        rows.append(
-            eval_dense_matrix(
-                "dense_base", "base all-MiniLM-L6-v2, exact search", base_enc, base_flat, val, "val1000"
-            )
-        )
-        del base_flat
-    else:
+        def int8_row(r: int = rescore) -> Row:
+            return eval_int8(encoder, np.asarray(q8), scale, emb_ft, val, "val1000", r)
+
+        name = f"dense_int8_rescore{rescore}" if rescore else "dense_int8"
+        rows.append(_one(out_dir, sets, name, "val1000", int8_row))
+
+    if not (art.dir / "emb_base.npy").exists():
         print("  emb_base.npy missing: skipping the dense_base row", flush=True)
+        return rows
 
-    rows += eval_82k(art, encoder, legacy)
+    def base_row() -> Row:
+        emb_base = np.load(art.dir / "emb_base.npy", mmap_mode="r")
+        flat = DenseIndex.flat(np.asarray(emb_base))
+        enc = STEncoder(s.base_encoder_name)
+        return eval_dense_matrix(
+            "dense_base", "base all-MiniLM-L6-v2, exact search", enc, flat, val, "val1000"
+        )
+
+    rows.append(_one(out_dir, sets, "dense_base", "val1000", base_row))
+    return rows
+
+
+def run(art: Artifacts, out_dir: Path, query_limit: int | None = None, with_rerank: bool = True) -> dict:
+    """Three phases ordered by memory: the served stack is released before the first flat index is built,
+    and each flat index is released before the next. Every finished row is checkpointed to disk."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    s = art.s
+    sets = {
+        "val1000": art.load_queries("val1000")[:query_limit],
+        "legacy200": art.load_queries("legacy200")[:query_limit],
+    }
+    legacy = sets["legacy200"]
+    t_all = time.time()
+    encoder = art.load_encoder()
+
+    rows, reranker_name = _phase_served(art, out_dir, sets, encoder, with_rerank)
+    gc.collect()
+    rows += _phase_matrices(art, out_dir, sets, encoder)
+    gc.collect()
+    names_82k = ["dense_82k", "bm25_82k", "hybrid_82k"]
+    rows += cached_rows(out_dir, names_82k, "legacy200", len(legacy), lambda: eval_82k(art, encoder, legacy))
 
     by_key = {(r.name, r.query_set): r for r in rows}
     comparisons = []
@@ -257,7 +344,7 @@ def run(art: Artifacts, out_dir: Path, query_limit: int | None = None, with_rera
         "corpus_size": art.corpus_size(),
         "hardware": _hardware(),
         "encoder": s.encoder_name,
-        "reranker": reranker.name if reranker else None,
+        "reranker": reranker_name,
         "rows": [{k: v for k, v in asdict(r).items() if k != "per_query"} for r in rows],
         "comparisons": comparisons,
     }
@@ -266,4 +353,5 @@ def run(art: Artifacts, out_dir: Path, query_limit: int | None = None, with_rera
         for r in rows:
             for rec in r.per_query:
                 f.write(json.dumps({"row": r.name, "query_set": r.query_set, **rec}) + "\n")
+    shutil.rmtree(out_dir / ".checkpoint" / "retrieval", ignore_errors=True)
     return report
