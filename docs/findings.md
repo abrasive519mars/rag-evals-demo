@@ -23,6 +23,8 @@ The encoder inherited from the earlier search engine is `all-MiniLM-L6-v2` fine-
 
 The fine-tune costs 4.7 points of recall@10 on held-out queries (-7.1 [-9.6, -4.7] when the served HNSW row is compared with the exact base row) and does not even fit its own training queries better (-4.5 [-9.0, +0.5], n = 200). The base model was trained on more than a billion pairs that already include MS MARCO; 5,000 further pairs moved it away from that optimum rather than towards the task.
 
+Reading the original training script (`artifact_formation.py` in the retired search-engine repository) shows why it could not have helped. Each training triple took the *first* passage listed for the query as the positive, not the passage the annotators marked as selected; in MS MARCO about one passage in ten is the selected one, so most positives were wrong. The hard negative was then the base model's nearest passage that was not that positive, which in many cases was the actually relevant passage. One epoch over 5,000 such triples with MultipleNegativesRankingLoss (batch 32, learning rate 5e-5) therefore pulled queries towards arbitrary passages and pushed them away from correct ones. The lesson is about labels, not about fine-tuning: with the selected passages as positives and more than 5,000 of them, a fine-tune might well beat the base model, and that is a measurable follow-up rather than an assumption.
+
 Decision: the served encoder switches to the base model. The fine-tuned model stays in the table as the comparison row, because the point of the evaluation is that it could say this.
 
 ## 4. HNSW costs 2.4 points at the default setting, and the setting was wrong
