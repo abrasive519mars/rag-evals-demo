@@ -86,3 +86,14 @@ Two ways to finish the embeddings in the morning:
 After either path, the rest is one command each: `python -m ragdemo.evals.run --retrieval`, then `--answers`, then `--write-readme`, then `python scripts/deploy_space.py`.
 
 Model notes from the live smoke tests tonight: Gemini 2.5 Flash is closed to new API keys; 3.8 and 3.7 Flash returned capacity errors for minutes at a time; 3.5 Flash answered in about 0.6 s with the thinking budget set to 0 (2.4 s with thinking on) and refused exactly when asked an off-corpus question. The OpenAI project has no credits, so the judge falls back to Gemini 3.6 Flash, which correctly flagged a planted unsupported claim in the smoke test.
+
+## Stage 1 follow-up: embeddings from Colab (16 Nov, morning)
+
+`scripts/colab_encode.py` ran on a Colab T4 and published five files to the dataset repo in one commit at 05:07 IST: `emb_ft.npy` and `emb_base.npy` (759,421 x 384 float32, 1,166 MB each), `hnsw_ft.index` (M = 32, efConstruction = 200, 1,373 MB), `emb_ft_int8.npy` with its per-dimension scale (292 MB), and the manifest with their SHA-256 sums. The upload took 0.8 minutes; the Colab runtime disconnected right after, which cost nothing because the files were already on the Hub. The two shards encoded locally overnight were deleted as superseded.
+
+Two housekeeping changes made when the files came down:
+
+- The artifact folder moved out of the repository (which lives under OneDrive) to a local folder set through `ARTIFACTS_DIR` in a git-ignored `.env`. OneDrive had been syncing every multi-hundred-megabyte file and was holding 3.4 GB of RAM doing it. `.env.example` now says so.
+- `python -m ragdemo.artifacts verify --download --eval` fetched the 4 GB in five minutes and reported every file `ok` against the manifest, including the legacy 82k index.
+
+Memory plan for the retrieval evaluation, from reading `evals/retrieval.py`: the HNSW index (1.4 GB), the BM25 matrix (0.3 GB) and the two small models stay loaded throughout; the exact flat index adds a 1.2 GB copy, freed before the base-encoder flat index adds its own. Peak is about 3.5 GB of process memory plus the memory-mapped embedding pages, so the run waits for the laptop to have at least 5 GB free.
