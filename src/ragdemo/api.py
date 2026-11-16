@@ -7,6 +7,7 @@ loads the real artifacts in a background thread at startup and reports `loading`
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from collections import OrderedDict
@@ -22,7 +23,7 @@ from .config import SERVED_MODES, Settings, get_settings
 from .generation import FakeGenerator, GeminiGenerator, Generator, parse_answer
 from .pipeline import RetrievalConfig, Retriever
 
-STATIC_DIR = Path(__file__).resolve().parent.parent.parent / "static"
+STATIC_DIR = Path(os.environ.get("STATIC_DIR") or Path(__file__).resolve().parent.parent.parent / "static")
 
 
 class AskRequest(BaseModel):

@@ -93,10 +93,19 @@ document.querySelectorAll('nav button').forEach(b => b.addEventListener('click',
   if (b.dataset.tab === 'evals') loadEvals();
 }));
 
-fetch('/health').then(r => r.json()).then(h => {
-  $('#corpus').textContent = h.corpus_size ? h.corpus_size.toLocaleString() : 'the';
-  if (h.status !== 'ok') $('#status').textContent = h.status === 'loading' ? 'Artifacts are loading, give it a minute…' : ('Service error: ' + h.error);
-});
+function pollHealth(attempt) {
+  fetch('/health').then(r => r.json()).then(h => {
+    $('#corpus').textContent = h.corpus_size ? h.corpus_size.toLocaleString() : 'the';
+    if (h.status === 'ok') { if (attempt > 0) $('#status').textContent = ''; return; }
+    if (h.status === 'loading') {
+      $('#status').textContent = 'Loading the index into memory (about 30 seconds on a cold start)…';
+      setTimeout(() => pollHealth(attempt + 1), 3000);
+    } else {
+      $('#status').textContent = 'Service error: ' + h.error;
+    }
+  }).catch(() => setTimeout(() => pollHealth(attempt + 1), 3000));
+}
+pollHealth(0);
 
 function esc(s) { return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function renderAnswer(text, hits) {

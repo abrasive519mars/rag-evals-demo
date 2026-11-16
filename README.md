@@ -99,13 +99,29 @@ make serve                      # first start downloads about 2.6 GB of artifact
 
 Then open http://localhost:7860. `GET /search?q=...&mode=hybrid` returns passages without calling the LLM; `POST /ask` streams an answer; `GET /evals` returns the reports behind the tables above.
 
-Regenerate the numbers:
+Regenerate the numbers. The evaluation holds the whole served stack in memory (about 2.6 GB) and scores
+180,000 cross-encoder pairs, so it runs on a Colab T4 in half an hour (`scripts/colab_eval.py`, four cells in
+its docstring) or on a laptop with `DEVICE=cpu` in a few hours:
 
 ```bash
 python -m ragdemo.evals.run --retrieval --answers --write-readme
 ```
 
-Rebuild the artifacts from scratch (about three hours on a laptop CPU, ten minutes on a Colab T4 with `--device cuda`):
+Deploy. The container needs about 4 GB of RAM for the index, the BM25 matrix and the two models. On Modal
+(free monthly credits, scales to zero, `deploy/modal_app.py`):
+
+```bash
+pip install modal && modal setup
+modal secret create rag-evals-demo GEMINI_API_KEY=...
+modal run deploy/modal_app.py            # once: fills a Volume with the 2.1 GB of serving artifacts
+modal deploy deploy/modal_app.py         # prints the URL; redeploy after every code change
+```
+
+The same image runs anywhere Docker runs (`Dockerfile`, port 7860); `scripts/deploy_space.py` targets a
+Hugging Face Space, which since mid-2026 needs a PRO subscription for Docker apps.
+
+Rebuild the artifacts from scratch (about three hours on a laptop CPU, ten minutes on a Colab T4 with
+`scripts/colab_encode.py`):
 
 ```bash
 python scripts/build_corpus.py
