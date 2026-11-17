@@ -14,7 +14,7 @@ from pathlib import Path
 
 from ..artifacts import Artifacts
 from ..config import get_settings
-from ..generation import FakeGenerator, GeminiGenerator
+from ..generation import FakeGenerator, GeminiGenerator, OpenAIGenerator
 from ..pipeline import Retriever
 from . import answers as answers_eval
 from . import retrieval as retrieval_eval
@@ -64,6 +64,9 @@ def main() -> None:
     p.add_argument("--no-rerank", action="store_true", help="skip the cross-encoder rows")
     p.add_argument("--fake", action="store_true", help="fake generator and judge (no API calls)")
     p.add_argument("--judge", choices=["auto", "openai", "gemini"], default="auto")
+    p.add_argument(
+        "--generate-only", action="store_true", help="fill the generation cache and stop (no judge needed)"
+    )
     p.add_argument("--out", default="evals")
     args = p.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
@@ -87,8 +90,13 @@ def main() -> None:
         encoder, dense, sparse = art.load_encoder(), art.load_dense(), art.load_sparse()
         reranker = None if args.no_rerank else art.load_reranker()
         retriever = Retriever(encoder, dense, sparse, art.texts, reranker=reranker)
-        generator = FakeGenerator() if args.fake else GeminiGenerator(s.gemini_api_key, s.gen_model)
-        judge = FakeJudge() if args.fake else pick_judge(s, args.judge)
+        if args.fake:
+            generator = FakeGenerator()
+        elif s.gen_base_url:
+            generator = OpenAIGenerator(s.openai_api_key, s.gen_model, base_url=s.gen_base_url)
+        else:
+            generator = GeminiGenerator(s.gemini_api_key, s.gen_model)
+        judge = FakeJudge() if (args.fake or args.generate_only) else pick_judge(s, args.judge)
         modes = ("bm25", "dense", "hybrid") + (() if args.no_rerank else ("hybrid_rerank",))
         rep = answers_eval.run(
             art,
@@ -100,6 +108,8 @@ def main() -> None:
             k_final=s.k_final,
             limit=args.limit,
             judge_workers=s.judge_workers,
+            gen_workers=s.gen_workers,
+            generate_only=args.generate_only,
         )
         print(f"done in {rep['elapsed_s']} s", flush=True)
 

@@ -149,6 +149,63 @@ class GeminiGenerator:
                 yield chunk.text
 
 
+class OpenAIGenerator:
+    """Any server that speaks the OpenAI chat API: used for the evaluation with an open-weights model served
+    by vLLM on a GPU (`base_url`), so the whole evaluation runs without a metered API. Same system prompt,
+    same user prompt, same citation parser as the Gemini generator."""
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        base_url: str | None = None,
+        temperature: float = 0.0,
+        max_output_tokens: int = 512,
+    ):
+        from openai import OpenAI
+
+        self._client = OpenAI(
+            api_key=api_key or "local", base_url=base_url or None, max_retries=6, timeout=600
+        )
+        self.name = model
+        self._temperature = temperature
+        self._max_tokens = max_output_tokens
+
+    def _messages(self, question: str, passages: list[dict]) -> list[dict]:
+        return [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": build_user_prompt(question, passages)},
+        ]
+
+    def generate(self, question: str, passages: list[dict]) -> Answer:
+        resp = self._client.chat.completions.create(
+            model=self.name,
+            messages=self._messages(question, passages),
+            temperature=self._temperature,
+            max_tokens=self._max_tokens,
+        )
+        usage = {}
+        if resp.usage:
+            usage = {
+                "prompt_tokens": int(resp.usage.prompt_tokens or 0),
+                "output_tokens": int(resp.usage.completion_tokens or 0),
+            }
+        return parse_answer(resp.choices[0].message.content or "", passages, usage, self.name)
+
+    def stream(self, question: str, passages: list[dict]) -> Iterator[str]:
+        stream = self._client.chat.completions.create(
+            model=self.name,
+            messages=self._messages(question, passages),
+            temperature=self._temperature,
+            max_tokens=self._max_tokens,
+            stream=True,
+        )
+        for chunk in stream:
+            piece = chunk.choices[0].delta.content if chunk.choices else None
+            if piece:
+                yield piece
+
+
 class FakeGenerator:
     """Deterministic stand-in for tests and offline runs: quotes the first passage and cites [1]."""
 

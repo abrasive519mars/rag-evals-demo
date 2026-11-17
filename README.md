@@ -21,8 +21,8 @@ Tables are regenerated from `evals/*.json` by `make eval`; the next run is in pr
 | Dense retrieval | Stock `all-MiniLM-L6-v2`, 384-d, FAISS HNSW at efSearch 128 | Small enough for CPU serving; trained on a billion pairs that include MS MARCO, so it is strong in this domain out of the box |
 | Fusion | Reciprocal rank fusion, k = 60 | Ranks only, so sparse and dense scores never need calibrating |
 | Rerank | `cross-encoder/ms-marco-MiniLM-L-6-v2` over the fused top 50 | Joint (query, passage) scoring where it is affordable: on 50 candidates, not 759k |
-| Generation | Gemini 3.5 Flash, temperature 0, cite every claim as `[n]`, fixed refusal string | Citations are resolved server-side; unresolved markers are counted; refusals are measurable |
-| Judge | A model other than the generator, strict JSON, claim-level faithfulness and correctness against the human answer: `gpt-5-mini` when the OpenAI key is billable, else Gemini 3.6 Flash | Verdicts cached by content hash, so swapping the judge is a rerun |
+| Generation | Same prompt everywhere: temperature 0, cite every claim as `[n]`, one fixed refusal string. The live page answers with Gemini 3.5 Flash; the evaluation generates with an open-weights model (Qwen2.5-7B-Instruct) served by vLLM on a Colab GPU, so the whole evaluation runs without a metered API | Citations are resolved server-side; unresolved markers are counted; refusals are measurable |
+| Judge | A model from a different family than the generator, strict JSON, claim-level faithfulness and correctness against the human answer: Llama 3.1 8B Instruct served by vLLM on the same GPU (`gpt-5-mini` when an OpenAI key is available) | Verdicts cached by content hash, so swapping the judge is a rerun |
 | Serving | FastAPI, server-sent events, exact-match cache, single static page | One container, one API key |
 
 ## Run it

@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     gen_model: str = (
         "gemini-3.5-flash"  # 2.5 Flash is closed to new keys; 3.8 and 3.7 were overloaded at build time
     )
+    gen_base_url: str = ""  # an OpenAI-compatible server (vLLM on a Colab GPU) serving gen_model for the eval
+    gen_workers: int = 1  # concurrent generation calls; keep 1 against a metered API, 8 against vLLM
     judge_model: str = "gpt-5-mini"
     judge_fallback_model: str = "gemini-3.6-flash"  # used when the OpenAI key cannot be billed
     judge_base_url: str = ""  # an OpenAI-compatible server (vLLM on a Colab GPU) serving judge_model

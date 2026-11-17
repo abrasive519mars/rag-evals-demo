@@ -7,8 +7,8 @@ In a Colab notebook with a GPU runtime:
     import os, getpass; os.environ["HF_TOKEN"] = getpass.getpass("HF write token: ")
     !python colab_eval.py --retrieval
 
-For the answer evaluation add the Gemini key the same way (GEMINI_API_KEY), start the judge server with
-colab_judge_server.py, export JUDGE_BASE_URL, JUDGE_MODEL, JUDGE_WORKERS, and run `--answers --judge openai`.
+For the answer evaluation, serve the generator with colab_llm_server.py and run `--answers --generate-only`
+with GEN_BASE_URL set; then serve the judge and run `--answers --judge openai` with JUDGE_BASE_URL set.
 
 Generations and judge verdicts are cached; the cache is stored on the dataset repo as cache.tar between
 runs, so a run that stops at a rate limit or a runtime reset resumes where it left off.

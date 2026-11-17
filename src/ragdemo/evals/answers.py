@@ -117,9 +117,13 @@ def run(
     limit: int | None = None,
     cache_dir: Path = Path("data/cache/generations"),
     judge_workers: int = 1,
+    gen_workers: int = 1,
+    generate_only: bool = False,
 ) -> dict:
-    """Per mode: retrieve and generate for every query in order (the generator is rate-limited and cached),
-    then grade the answers with `judge_workers` concurrent judge calls (a batching server wants many)."""
+    """Per mode: retrieve and generate for every query (`gen_workers` at a time; keep 1 against a metered
+    API, the cache makes reruns free), then grade with `judge_workers` concurrent judge calls. With
+    `generate_only` the generation cache is filled and nothing is graded or written, so the generator and
+    the judge can be served one after the other on a single GPU."""
     out_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
     queries = art.load_queries("legacy200")[:limit] + art.load_queries("unans50")[: (limit or 50)]
@@ -129,15 +133,21 @@ def run(
         cfg = RetrievalConfig(mode=mode, k_final=k_final)
         row = AnswerRow(mode=mode)
         gen_ms: list[float] = []
-        generated: list[tuple[dict, Answer, float]] = []
-        for q in queries:
+
+        def produce(q: dict, cfg=cfg, mode=mode) -> tuple[dict, Answer, float, float | None]:
             res = retriever.search(q["query"], cfg)
             by_pid = art.passages([h.pid for h in res.hits])
             passages = [by_pid[h.pid] for h in res.hits if h.pid in by_pid]
             ans, ms, cached = _generate_cached(generator, cache_dir, mode, q["query"], passages)
-            if not cached:
-                gen_ms.append(ms)
-            generated.append((q, ans, round(res.timings_ms.get("total", 0.0), 2)))
+            return q, ans, round(res.timings_ms.get("total", 0.0), 2), (None if cached else ms)
+
+        with ThreadPoolExecutor(max_workers=max(1, gen_workers)) as pool:
+            produced = list(pool.map(produce, queries))
+        gen_ms = [ms for *_, ms in produced if ms is not None]
+        generated = [(q, ans, retrieval_ms) for q, ans, retrieval_ms, _ in produced]
+        if generate_only:
+            print(f"  {mode:14s} generated {len(generated)} answers (cache only)", flush=True)
+            continue
         print(f"  {mode:14s} generated {len(generated)} answers, grading...", flush=True)
         with ThreadPoolExecutor(max_workers=max(1, judge_workers)) as pool:
             graded = list(pool.map(lambda item: _grade(item[0], item[1], judge), generated))
@@ -153,6 +163,8 @@ def run(
         }
         print(f"  {mode:14s} {shown}", flush=True)
 
+    if generate_only:
+        return {"elapsed_s": round(time.time() - t_all), "generator": generator.name, "rows": []}
     report = {
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "elapsed_s": round(time.time() - t_all),

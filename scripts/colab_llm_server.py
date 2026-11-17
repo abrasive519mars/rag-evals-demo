@@ -1,11 +1,11 @@
-"""Start an open-weights judge on the Colab GPU as an OpenAI-compatible server (vLLM), then wait for it.
+"""Serve an open-weights model on the Colab GPU as an OpenAI-compatible server (vLLM), then wait for it.
 
-    !python colab_judge_server.py                 # installs vLLM if needed, serves the default judge on :8000
+    !python colab_llm_server.py --model Qwen/Qwen2.5-7B-Instruct-AWQ --port 8001          # the generator
+    !python colab_llm_server.py                                             # the judge (Llama 3.1 8B)
 
-Default judge: Qwen2.5-7B-Instruct in 4-bit AWQ, about 5 GB of the T4's 16 GB, a different model family
-from the Gemini generator. The server keeps 65% of the GPU so the encoder and the cross-encoder of the
-evaluation still fit beside it. JSON-schema output is enforced by vLLM's structured decoding, so the
-judge prompts and parsers are exactly those used with OpenAI.
+One model at a time on a T4: starting a server stops any vLLM server already running. Both defaults are
+4-bit AWQ builds that fit the 16 GB card with a 4k context. JSON-schema output for the judge is enforced
+by vLLM's structured decoding, so the judge prompts and parsers are exactly those used with OpenAI.
 """
 
 from __future__ import annotations
@@ -16,14 +16,14 @@ import sys
 import time
 import urllib.request
 
-DEFAULT_MODEL = "Qwen/Qwen2.5-7B-Instruct-AWQ"
+JUDGE_MODEL = "hugging-quants/Meta-Llama-3.1-8B-Instruct-AWQ-INT4"
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--model", default=DEFAULT_MODEL)
+    p.add_argument("--model", default=JUDGE_MODEL)
     p.add_argument("--port", type=int, default=8000)
-    p.add_argument("--gpu-fraction", type=float, default=0.65)
+    p.add_argument("--gpu-fraction", type=float, default=0.8)
     p.add_argument("--max-len", type=int, default=4096)
     args = p.parse_args()
 
@@ -33,7 +33,9 @@ def main() -> None:
         print("installing vLLM (several minutes)...", flush=True)
         subprocess.run([sys.executable, "-m", "pip", "install", "-q", "vllm"], check=True)
 
-    log = open("vllm.log", "w")  # noqa: SIM115 - the server outlives this script
+    subprocess.run(["pkill", "-f", "vllm.entrypoints.openai.api_server"], check=False)
+    time.sleep(5)
+    log = open(f"vllm_{args.port}.log", "w")  # noqa: SIM115 - the server outlives this script
     cmd = [
         sys.executable,
         "-m",
@@ -54,17 +56,16 @@ def main() -> None:
     subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     url = f"http://127.0.0.1:{args.port}/health"
     t0 = time.time()
-    while time.time() - t0 < 1200:
+    while time.time() - t0 < 1500:
         try:
             if urllib.request.urlopen(url, timeout=2).status == 200:
                 print(
-                    f"judge server ready in {(time.time() - t0) / 60:.1f} min: {args.model} on :{args.port}"
+                    f"ready in {(time.time() - t0) / 60:.1f} min: {args.model} on http://127.0.0.1:{args.port}/v1"
                 )
-                print(f"set JUDGE_BASE_URL=http://127.0.0.1:{args.port}/v1 JUDGE_MODEL={args.model}")
                 return
         except Exception:  # noqa: BLE001 - not up yet
             time.sleep(5)
-    sys.exit("vLLM did not come up in 20 minutes; see vllm.log")
+    sys.exit(f"vLLM did not come up in 25 minutes; see vllm_{args.port}.log")
 
 
 if __name__ == "__main__":
