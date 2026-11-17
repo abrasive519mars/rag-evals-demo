@@ -7,8 +7,9 @@ In a Colab notebook with a GPU runtime:
     import os, getpass; os.environ["HF_TOKEN"] = getpass.getpass("HF write token: ")
     !python colab_eval.py --retrieval
 
-For the answer evaluation, serve the generator with colab_llm_server.py and run `--answers --generate-only`
-with GEN_BASE_URL set; then serve the judge and run `--answers --judge openai` with JUDGE_BASE_URL set.
+For the answer evaluation, start colab_ollama.py (serves the generator and the judge together on :11434),
+set GEN_BASE_URL, GEN_MODEL, JUDGE_BASE_URL, JUDGE_MODEL and OPENAI_API_KEY=local, then run
+`--answers --judge openai`. colab_llm_server.py (vLLM) is the faster path on GPUs newer than a T4.
 
 Generations and judge verdicts are cached; the cache is stored on the dataset repo as cache.tar between
 runs, so a run that stops at a rate limit or a runtime reset resumes where it left off.

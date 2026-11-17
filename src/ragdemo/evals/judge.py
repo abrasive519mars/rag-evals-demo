@@ -140,15 +140,28 @@ class OpenAIJudge:
         path = self._cache / f"{key}.json"
         if path.exists():
             return path.read_text(encoding="utf-8")
-        resp = self._client.chat.completions.create(
-            model=self.name,
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {"name": schema_name, "schema": schema, "strict": True},
-            },
-            **({} if self._local else {"reasoning_effort": "low"}),
-        )
+        from openai import BadRequestError
+
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        try:
+            resp = self._client.chat.completions.create(
+                model=self.name,
+                messages=messages,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {"name": schema_name, "schema": schema, "strict": True},
+                },
+                **({} if self._local else {"reasoning_effort": "low"}),
+            )
+        except BadRequestError:
+            if not self._local:
+                raise
+            # Plain JSON mode for servers without schema-constrained decoding; the parsers tolerate drift.
+            hint = f"{system}\n\nReply with one JSON object matching this schema:\n{json.dumps(schema)}"
+            messages[0] = {"role": "system", "content": hint}
+            resp = self._client.chat.completions.create(
+                model=self.name, messages=messages, response_format={"type": "json_object"}, temperature=0
+            )
         raw = resp.choices[0].message.content or "{}"
         path.write_text(raw, encoding="utf-8")
         return raw
