@@ -23,7 +23,12 @@ from .report import render, write_readme
 
 
 def pick_judge(s, choice: str):
-    """OpenAI gpt-5-mini when the key works; otherwise a Gemini model different from the generator."""
+    """An OpenAI-compatible server when JUDGE_BASE_URL is set (an open-weights model on a GPU), else OpenAI
+    when the key works, else a Gemini model different from the generator."""
+    if s.judge_base_url:
+        judge = OpenAIJudge(s.openai_api_key or "local", s.judge_model, base_url=s.judge_base_url)
+        judge.correctness("ping", "pong", ["pong"])
+        return judge
     if choice in ("auto", "openai") and s.openai_api_key:
         judge = OpenAIJudge(s.openai_api_key, s.judge_model)
         try:
@@ -86,7 +91,15 @@ def main() -> None:
         judge = FakeJudge() if args.fake else pick_judge(s, args.judge)
         modes = ("bm25", "dense", "hybrid") + (() if args.no_rerank else ("hybrid_rerank",))
         rep = answers_eval.run(
-            art, retriever, generator, judge, out, modes=modes, k_final=s.k_final, limit=args.limit
+            art,
+            retriever,
+            generator,
+            judge,
+            out,
+            modes=modes,
+            k_final=s.k_final,
+            limit=args.limit,
+            judge_workers=s.judge_workers,
         )
         print(f"done in {rep['elapsed_s']} s", flush=True)
 

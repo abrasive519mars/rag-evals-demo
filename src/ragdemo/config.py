@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     )
     judge_model: str = "gpt-5-mini"
     judge_fallback_model: str = "gemini-3.6-flash"  # used when the OpenAI key cannot be billed
+    judge_base_url: str = ""  # an OpenAI-compatible server (vLLM on a Colab GPU) serving judge_model
+    judge_workers: int = 1  # concurrent judge calls; a batching server such as vLLM wants 8 or more
 
     # retrieval defaults (see docs/design.md section 4)
     k_candidates: int = 50

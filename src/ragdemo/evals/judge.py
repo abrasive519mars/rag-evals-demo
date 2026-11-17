@@ -115,12 +115,22 @@ def parse_correctness(raw: str) -> dict:
 
 
 class OpenAIJudge:
-    def __init__(self, api_key: str, model: str = "gpt-5-mini", cache_dir: Path = Path("data/cache/judge")):
+    """OpenAI, or any server that speaks its chat API with JSON-schema output, such as vLLM serving an
+    open-weights model on a GPU: pass `base_url` and any non-empty key."""
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "gpt-5-mini",
+        cache_dir: Path = Path("data/cache/judge"),
+        base_url: str | None = None,
+    ):
         from openai import OpenAI
 
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY is not set")
-        self._client = OpenAI(api_key=api_key, max_retries=6)
+        self._client = OpenAI(api_key=api_key, base_url=base_url or None, max_retries=6, timeout=600)
+        self._local = bool(base_url)
         self.name = model
         self._cache = cache_dir
         self._cache.mkdir(parents=True, exist_ok=True)
@@ -137,7 +147,7 @@ class OpenAIJudge:
                 "type": "json_schema",
                 "json_schema": {"name": schema_name, "schema": schema, "strict": True},
             },
-            reasoning_effort="low",
+            **({} if self._local else {"reasoning_effort": "low"}),
         )
         raw = resp.choices[0].message.content or "{}"
         path.write_text(raw, encoding="utf-8")

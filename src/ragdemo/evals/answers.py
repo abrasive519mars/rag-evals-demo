@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -112,7 +113,10 @@ def run(
     k_final: int = 5,
     limit: int | None = None,
     cache_dir: Path = Path("data/cache/generations"),
+    judge_workers: int = 1,
 ) -> dict:
+    """Per mode: retrieve and generate for every query in order (the generator is rate-limited and cached),
+    then grade the answers with `judge_workers` concurrent judge calls (a batching server wants many)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
     queries = art.load_queries("legacy200")[:limit] + art.load_queries("unans50")[: (limit or 50)]
@@ -122,6 +126,7 @@ def run(
         cfg = RetrievalConfig(mode=mode, k_final=k_final)
         row = AnswerRow(mode=mode)
         gen_ms: list[float] = []
+        generated: list[tuple[dict, Answer, float]] = []
         for q in queries:
             res = retriever.search(q["query"], cfg)
             by_pid = art.passages([h.pid for h in res.hits])
@@ -129,8 +134,12 @@ def run(
             ans, ms, cached = _generate_cached(generator, cache_dir, mode, q["query"], passages)
             if not cached:
                 gen_ms.append(ms)
-            rec = _grade(q, ans, judge)
-            rec["retrieval_ms"] = round(res.timings_ms.get("total", 0.0), 2)
+            generated.append((q, ans, round(res.timings_ms.get("total", 0.0), 2)))
+        print(f"  {mode:14s} generated {len(generated)} answers, grading...", flush=True)
+        with ThreadPoolExecutor(max_workers=max(1, judge_workers)) as pool:
+            graded = list(pool.map(lambda item: _grade(item[0], item[1], judge), generated))
+        for (_q, ans, retrieval_ms), rec in zip(generated, graded, strict=True):
+            rec["retrieval_ms"] = retrieval_ms
             rec["usage"] = ans.usage
             row.per_query.append(rec)
         rows.append(_aggregate(row, gen_ms))
