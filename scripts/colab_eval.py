@@ -96,8 +96,8 @@ def main() -> None:
         )
         if check.returncode != 0:
             sys.exit(
-                "DEVICE=cuda but this torch cannot see the GPU (a pip install replaced it with a CPU build, or "
-                "the runtime is not a GPU runtime). Fix: !pip -q install torch --index-url "
+                "DEVICE=cuda but this torch cannot see the GPU (a pip install replaced it with a CPU build, "
+                "or the runtime is not a GPU runtime). Fix: !pip -q install torch --index-url "
                 "https://download.pytorch.org/whl/cu126  then rerun this cell; or set DEVICE=cpu."
             )
 
