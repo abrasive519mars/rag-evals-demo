@@ -32,7 +32,10 @@ class AnswerRow:
 
 
 def _cache_key(mode: str, model: str, question: str, pids: list[int]) -> str:
-    return hashlib.sha256(f"{mode}|{model}|{question}|{','.join(map(str, pids))}".encode()).hexdigest()
+    """The generator never sees the mode name, only the question and the passages, so two modes that
+    retrieve the same top-k share one generation. That is also fewer API calls on a capped free tier."""
+    raw = json.dumps({"model": model, "q": question, "pids": pids}, sort_keys=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def _generate_cached(
