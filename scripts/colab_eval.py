@@ -34,7 +34,11 @@ RAW = "https://raw.githubusercontent.com/abrasive519mars/rag-evals-demo/main"
 
 def restore_cache(token: str) -> None:
     from huggingface_hub import hf_hub_download
-    from huggingface_hub.utils import EntryNotFoundError
+
+    try:
+        from huggingface_hub.errors import EntryNotFoundError
+    except ImportError:  # older huggingface_hub
+        from huggingface_hub.utils import EntryNotFoundError
 
     try:
         path = hf_hub_download(REPO, "cache.tar", repo_type="dataset", token=token, local_dir=str(WORK))
@@ -85,6 +89,17 @@ def main() -> None:
             ["wget", "-q", "-O", str(eval_dir / "queries.jsonl"), f"{RAW}/data/eval/queries.jsonl"],
             check=True,
         )
+
+    if env["DEVICE"].startswith("cuda"):
+        check = subprocess.run(
+            [sys.executable, "-c", "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)"]
+        )
+        if check.returncode != 0:
+            sys.exit(
+                "DEVICE=cuda but this torch cannot see the GPU (a pip install replaced it with a CPU build, or "
+                "the runtime is not a GPU runtime). Fix: !pip -q install torch --index-url "
+                "https://download.pytorch.org/whl/cu126  then rerun this cell; or set DEVICE=cpu."
+            )
 
     api = HfApi(token=token)
     t = time.time()
