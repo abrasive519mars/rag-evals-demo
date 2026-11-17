@@ -2,9 +2,9 @@
 
     !python colab_ollama.py                 # installs Ollama, starts it, pulls the generator and the judge
 
-Both models stay loaded side by side on a T4 (about 5 GB each in 4-bit), so the generator (Qwen2.5-7B-Instruct)
-and the judge (Llama 3.1 8B Instruct) are served by one process and selected per request by name. The eval then
-runs with GEN_BASE_URL and JUDGE_BASE_URL both set to http://127.0.0.1:11434/v1.
+Both models stay loaded side by side on a T4 (about 5 GB each in 4-bit), so the generator
+(Qwen2.5-7B-Instruct) and the judge (Llama 3.1 8B Instruct) are served by one process and selected per
+request by name. The eval then runs with GEN_BASE_URL and JUDGE_BASE_URL both set to http://127.0.0.1:11434/v1.
 """
 
 from __future__ import annotations
