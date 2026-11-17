@@ -1,9 +1,9 @@
-"""Build the served HNSW index and the int8 quantised vectors from emb_ft.npy.
+"""Build the served HNSW index and the int8 quantised vectors from emb_base.npy.
 
-  python scripts/build_index.py --emb data/artifacts/emb_ft.npy
+  python scripts/build_index.py --emb data/artifacts/emb_base.npy
 
-Writes data/artifacts/hnsw_ft.index (FAISS IndexHNSWFlat, inner product, M=32, efConstruction=200)
-and data/artifacts/emb_ft_int8.npy plus emb_ft_int8_scale.npy (per-dimension symmetric scale).
+Writes data/artifacts/hnsw_base.index (FAISS IndexHNSWFlat, inner product, M=32, efConstruction=200)
+and data/artifacts/emb_base_int8.npy plus emb_base_int8_scale.npy (per-dimension symmetric scale).
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ def build_int8(emb: np.ndarray, out: Path, scale_out: Path) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--emb", default="data/artifacts/emb_ft.npy")
+    p.add_argument("--emb", default="data/artifacts/emb_base.npy")
     p.add_argument("--out-dir", default="data/artifacts")
     p.add_argument("--m", type=int, default=32)
     p.add_argument("--ef-construction", type=int, default=200)
@@ -53,8 +53,8 @@ def main() -> None:
     emb = np.load(args.emb, mmap_mode="r")
     out_dir = Path(args.out_dir)
     print(f"{emb.shape[0]:,} vectors x {emb.shape[1]}", flush=True)
-    build_int8(emb, out_dir / "emb_ft_int8.npy", out_dir / "emb_ft_int8_scale.npy")
-    build_hnsw(np.asarray(emb, dtype=np.float32), args.m, args.ef_construction, out_dir / "hnsw_ft.index")
+    build_int8(emb, out_dir / "emb_base_int8.npy", out_dir / "emb_base_int8_scale.npy")
+    build_hnsw(np.asarray(emb, dtype=np.float32), args.m, args.ef_construction, out_dir / "hnsw_base.index")
 
 
 if __name__ == "__main__":

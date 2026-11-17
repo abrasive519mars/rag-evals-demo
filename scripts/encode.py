@@ -4,7 +4,6 @@ Shards of --shard passages are written to data/cache/<out-stem>.shardNNN.npy and
 disconnect, a sleep or an out-of-memory stop costs at most one shard. Only one shard of text is in memory at
 a time (the file is indexed by byte offset once). The final file is float32, L2-normalised, row i == pid i.
 
-  python scripts/encode.py --model data/artifacts/minilm-l6-msmarco-ft --out data/artifacts/emb_ft.npy
   python scripts/encode.py --model sentence-transformers/all-MiniLM-L6-v2 --out data/artifacts/emb_base.npy
   python scripts/encode.py ... --device cuda --batch 512          # on a Colab GPU, about ten minutes
 """

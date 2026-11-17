@@ -1,12 +1,12 @@
 """One-shot Colab job: build the served HNSW index and the int8 copy over an existing embedding matrix.
 
 Used when the served encoder changes but its embeddings already exist on the dataset repo (the base
-`all-MiniLM-L6-v2` matrix was produced by colab_encode.py alongside the fine-tuned one). In a Colab notebook:
+`all-MiniLM-L6-v2` matrix was produced by colab_encode.py). In a Colab notebook:
 
     !pip -q install faiss-cpu huggingface_hub numpy
     !wget -q https://raw.githubusercontent.com/abrasive519mars/rag-evals-demo/main/scripts/colab_build_base_index.py
     import os, getpass; os.environ["HF_TOKEN"] = getpass.getpass("HF write token: ")
-    !python colab_build_base_index.py            # --tag ft would rebuild the fine-tuned index instead
+    !python colab_build_base_index.py            # --tag <suffix> for another encoder's matrix
 
 About ten minutes for the HNSW build on the Colab CPU, then the upload (about 1.7 GB).
 """

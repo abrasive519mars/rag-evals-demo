@@ -8,7 +8,7 @@ Scaffold already present (12 Nov) and its fate: `pyproject.toml` and `src/ragdem
 
 ## Stage 0: bootstrap
 
-- [ ] Publish the existing artifacts to the dataset repo with a manifest of SHA-256 checksums: the encoder renamed to `minilm-l6-msmarco-ft`, `corpus_subset.jsonl` as `legacy/corpus100k.jsonl`, `fine_tuned_hnsw.index` as `legacy/hnsw100k.index`, `eval_set.json` as `legacy/eval200.json`
+- [ ] Publish the existing artifacts to the dataset repo with a manifest of SHA-256 checksums: `corpus_subset.jsonl` as `legacy/corpus100k.jsonl`, the old HNSW index as `legacy/hnsw100k.index`, `eval_set.json` as `legacy/eval200.json`
 - [ ] Repository layout: `src/ragdemo/{artifacts,retrieval,pipeline,generation,evals,api}`, `tests/`, `static/`, `docs/`, `scripts/`
 - [ ] `pyproject.toml`: runtime deps (fastapi, uvicorn, numpy, scipy, faiss-cpu, sentence-transformers, torch CPU, huggingface_hub, google-genai, pydantic-settings), dev deps (pytest, httpx, ruff); ruff config; `pytest` markers `slow` and `integration`
 - [ ] `Makefile` targets `test`, `eval`, `serve`; `.env.example`
@@ -24,8 +24,8 @@ Local part:
 - [ ] Schema tests on five-line fixtures
 
 Colab T4 part (`scripts/encode.py`, `scripts/build_index.py`, resumable, shards to Drive):
-- [ ] Encode the corpus with `minilm-l6-msmarco-ft` and with `all-MiniLM-L6-v2`, fp16, batch 512, L2-normalised; write `emb_ft.npy`, `emb_base.npy`
-- [ ] Build `hnsw_ft.index` (M = 32, efConstruction = 200) and `emb_ft_int8.npy` with per-dimension scales
+- [ ] Encode the corpus with `all-MiniLM-L6-v2`, fp16, batch 512, L2-normalised; write `emb_base.npy`
+- [ ] Build `hnsw_base.index` (M = 32, efConstruction = 200) and `emb_base_int8.npy` with per-dimension scales
 - [ ] Upload all built artifacts and `manifest.json` to the dataset repo
 
 Loader:
@@ -43,7 +43,7 @@ Loader:
 
 ## Stage 3: dense retrieval and fusion
 
-- [ ] `DenseRetriever` with `efSearch` parameter; flat exact index over `emb_ft.npy` for evaluation
+- [ ] `DenseRetriever` with `efSearch` parameter; flat exact index over `emb_base.npy` for evaluation
 - [ ] `fuse_rrf`
 - [ ] `Retriever` pipeline with `RetrievalConfig` and per-stage timings; modes `bm25`, `dense`, `hybrid`
 - [ ] Fixture tests for all three modes
@@ -61,9 +61,9 @@ Loader:
 - [ ] `evals/retrieval.py`: Recall@k, MRR@10, nDCG@10, paired bootstrap confidence intervals
 - [ ] Sweeps: k, `efSearch` versus flat, `rerank_depth`
 - [ ] Per-stage latency collection in the same run
-- [ ] Evaluation-only rows: `dense_base` over `emb_base.npy`; `dense_int8` with a rescoring-depth sweep; `dense@100k` on the legacy index with `legacy200`
+- [ ] Evaluation-only rows: `dense_flat` (exact search over `emb_base.npy`); `dense_int8` with a rescoring-depth sweep; `dense_82k` over the first 82,326 passages with `legacy200`
 - [ ] `evals/report.json`, `evals/table.md`, README markers via `make eval`
-- [ ] `docs/findings.md` first draft: fine-tuning effect, fusion trade-off, reranker effect, HNSW loss, quantisation loss, corpus-size effect (100k versus 1M on the same 200 queries), latency before and after
+- [ ] `docs/findings.md` first draft: fusion trade-off, reranker effect, HNSW loss, quantisation loss, corpus-size effect (100k versus 1M on the same 200 queries), latency before and after
 - Exit: served modes plus evaluation rows in one table with confidence intervals; findings reviewed.
 
 ## Stage 6: generation

@@ -46,7 +46,7 @@ def _hnsw(emb: np.ndarray, path: Path) -> None:
 
 def _build_tiny_artifacts(root: Path) -> Settings:
     art_dir, eval_dir = root / "artifacts", root / "eval"
-    (art_dir / "legacy").mkdir(parents=True)
+    art_dir.mkdir(parents=True)
     eval_dir.mkdir()
     texts = []
     for i in range(60):
@@ -58,13 +58,11 @@ def _build_tiny_artifacts(root: Path) -> Settings:
 
     enc = STEncoder(BASE)
     emb = enc.encode_batch(texts)
-    for tag in ("base", "ft"):
-        np.save(art_dir / f"emb_{tag}.npy", emb)
-        scale = np.abs(emb).max(axis=0) / 127.0
-        np.save(art_dir / f"emb_{tag}_int8.npy", np.clip(np.rint(emb / scale), -127, 127).astype(np.int8))
-        np.save(art_dir / f"emb_{tag}_int8_scale.npy", scale.astype(np.float32))
+    np.save(art_dir / "emb_base.npy", emb)
+    scale = np.abs(emb).max(axis=0) / 127.0
+    np.save(art_dir / "emb_base_int8.npy", np.clip(np.rint(emb / scale), -127, 127).astype(np.int8))
+    np.save(art_dir / "emb_base_int8_scale.npy", scale.astype(np.float32))
     _hnsw(emb, art_dir / "hnsw_base.index")
-    _hnsw(emb[:20], art_dir / "legacy" / "hnsw82k.index")
     BM25Index.build(iter(texts)).save(art_dir / "bm25.npz", art_dir / "bm25_vocab.json")
 
     with (eval_dir / "queries.jsonl").open("w", encoding="utf-8") as f:
@@ -86,8 +84,6 @@ def _build_tiny_artifacts(root: Path) -> Settings:
         eval_dir=eval_dir,
         encoder_name=BASE,
         encoder_tag="base",
-        alt_encoder_name=BASE,
-        alt_encoder_tag="ft",
         device="cpu",
     )
 
@@ -110,7 +106,6 @@ def test_retrieval_eval_runs_end_to_end_on_a_tiny_corpus(tmp_path):
         ("dense_flat", "val1000"),
         ("dense_flat", "legacy200"),
         ("dense_int8_rescore200", "val1000"),
-        ("dense_alt_flat", "legacy200"),
         ("dense_82k", "legacy200"),
         ("bm25_82k", "legacy200"),
     ):

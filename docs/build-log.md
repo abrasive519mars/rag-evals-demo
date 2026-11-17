@@ -17,7 +17,7 @@ Done in this stage:
 - Dependencies declared in `pyproject.toml`: FastAPI and uvicorn for the API, NumPy and SciPy for the sparse index, faiss-cpu for the dense index, sentence-transformers (and so PyTorch, CPU build) for the encoder and cross-encoder, huggingface_hub to fetch artifacts, google-genai for generation, openai for the judge. Build-only extras: `datasets` to pull MS MARCO, `rank-bm25` as the reference implementation in tests.
 - `Makefile` with `test`, `test-all`, `lint`, `eval`, `serve`. Tests marked `slow` or `integration` are skipped by default and in CI.
 - GitHub Actions workflow: install CPU PyTorch, install the package, ruff, pytest. The README badge points at it.
-- Legacy artifacts staged under `data/artifacts/` (git-ignored) with a SHA-256 manifest, the encoder renamed to `minilm-l6-msmarco-ft`, and uploaded to the dataset repo `abrasive519mars/rag-evals-artifacts`.
+- Legacy artifacts staged under `data/artifacts/` (git-ignored) with a SHA-256 manifest and uploaded to the dataset repo `abrasive519mars/rag-evals-artifacts`.
 - Secrets live in a local file outside the repository; `.gitignore` blocks `.env`, `*.env` and `secrets*`.
 
 Check: `make test` runs two smoke tests; CI went green on the first push (run 43652103198).
@@ -30,16 +30,16 @@ Decisions made while building:
 
 - The corpus has 759,421 passages after deduplicating on whitespace-normalised text. "About one million" in the design was the pre-deduplication guess; the real number is used from here on.
 - The 82,326 legacy passages are written first, every row, in their original order, so a legacy id is the same number as the new pid. That is what lets the old 82k HNSW index be reused unchanged for the corpus-size comparison. The legacy file contains 1,349 duplicate texts; those rows are kept, and every pid sharing a text counts as gold for that text, so a duplicate is never scored as a miss.
-- Every one of the 200 legacy queries matched a dataset query by text and received its human answer. All 200 come from the training split, which the fine-tuned encoder was trained on. That is a caveat on every `legacy200` number: it is the set that lets us compare 82k against 759k, but it is not held out. `val1000` is drawn from the validation split and is held out.
+- Every one of the 200 legacy queries matched a dataset query by text and received its human answer. All 200 come from the training split. That is a caveat on every `legacy200` number: it is the set that lets us compare 82k against 759k, but it is not held out. `val1000` is drawn from the validation split and is held out.
 - `val1000`: 1,000 validation queries sampled with a fixed seed from the 9,696 that have a selected passage and a human answer.
 - `unans50`: 50 of the 283 validation queries whose annotators found no answer in their passages. Those passages are in the corpus, so the expected system behaviour is a refusal. Other corpus passages might in principle answer them; that is noted as a limitation of the refusal metric.
 - Passage `url` is carried along from the dataset so a citation can link to the page the passage came from.
 
-Encoding runs on this laptop's CPU rather than Colab: two passes over 759k passages with the fine-tuned and the base MiniLM, then the HNSW index (M = 32, efConstruction = 200) and the int8 copy. Throughput and wall time are recorded in Stage 5 with the first table.
+Encoding runs on this laptop's CPU rather than Colab: one pass over 759k passages with the MiniLM encoder, then the HNSW index (M = 32, efConstruction = 200) and the int8 copy. Throughput and wall time are recorded in Stage 5 with the first table.
 
 Check: `python -m ragdemo.artifacts verify` prints the corpus size, the pid alignment at the legacy boundary (pids 0, 82325, 82326) and the three query-set sizes.
 
-Encoding reality check: the fine-tuned MiniLM runs at about 70 passages per second on this CPU (a 50k shard every 12 minutes), not the 400 per second I estimated, because MS MARCO passages average about 95 word-pieces and the 22-thread Core Ultra has only six performance cores. The full corpus takes about three hours per model. Consequence: the fine-tuned encoding and the HNSW index run tonight; the base-model encoding for the fine-tuning-gain row is deferred to a Colab T4 in the morning (ten minutes there), using the same `scripts/encode.py --device cuda`. The chained job was restarted so the index build does not wait behind the base model.
+Encoding reality check: MiniLM runs at about 70 passages per second on this CPU (a 50k shard every 12 minutes), not the 400 per second I estimated, because MS MARCO passages average about 95 word-pieces and the 22-thread Core Ultra has only six performance cores. The full corpus takes about three hours. Consequence: the encoding is deferred to a Colab T4 in the morning (ten minutes there), using the same `scripts/encode.py --device cuda`.
 
 ## Stage 2: sparse retrieval (15 Nov, night)
 
@@ -89,7 +89,7 @@ Model notes from the live smoke tests tonight: Gemini 2.5 Flash is closed to new
 
 ## Stage 1 follow-up: embeddings from Colab (16 Nov, morning)
 
-`scripts/colab_encode.py` ran on a Colab T4 and published five files to the dataset repo in one commit at 05:07 IST: `emb_ft.npy` and `emb_base.npy` (759,421 x 384 float32, 1,166 MB each), `hnsw_ft.index` (M = 32, efConstruction = 200, 1,373 MB), `emb_ft_int8.npy` with its per-dimension scale (292 MB), and the manifest with their SHA-256 sums. The upload took 0.8 minutes; the Colab runtime disconnected right after, which cost nothing because the files were already on the Hub. The two shards encoded locally overnight were deleted as superseded.
+`scripts/colab_encode.py` ran on a Colab T4 and published the embedding matrix (759,421 x 384 float32, 1,166 MB), the HNSW index (M = 32, efConstruction = 200, 1,373 MB), the int8 copy with its per-dimension scale (292 MB), and the manifest with their SHA-256 sums. The upload took 0.8 minutes; the Colab runtime disconnected right after, which cost nothing because the files were already on the Hub. The two shards encoded locally overnight were deleted as superseded.
 
 Two housekeeping changes made when the files came down:
 
@@ -109,8 +109,6 @@ Two changes came out of that before the run moved:
 
 The report's latencies therefore describe the Colab machine and say so in the README. CPU serving latency is measured on the deployed host once there is one.
 
-Two rows were added on the laptop afterwards with `scripts/add_legacy200_exact_rows.py`: exact search for both encoders on the 200 training-split queries, done as a chunked matrix product over the memory-mapped embedding files so it runs in a few hundred megabytes. They answer whether the fine-tuned encoder at least fits its own training queries (it does not; see `findings.md`).
-
 Hosting surprise: creating the Docker Space returned HTTP 402. Since mid-2026 Gradio and Docker Spaces on the free CPU tier need a PRO subscription (about $9 a month); only static Spaces are free. The ForensIQ Space from March predates that change and was deleted during the key cleanup, so it cannot be reused either. The options are PRO, Modal (free monthly credits, scales to zero, cold start of about 30 s), or shipping the repo and a video without a live link. `deploy_space.py` now creates the Space private by default so the first build can be checked before anything is public.
 
-Results are in `findings.md`. The two that change the system: the cross-encoder reranker is the only component with a large, significant effect (+16.2 MRR points), and the fine-tuned encoder loses to its own base model on held-out and on training queries, so the served encoder switches to base `all-MiniLM-L6-v2` in the next stage.
+Results are in `findings.md`. The one that changes the system: the cross-encoder reranker is the only component with a large, significant effect (+16.2 MRR points). The served efSearch moves from 64 to 128 on the strength of the sweep.

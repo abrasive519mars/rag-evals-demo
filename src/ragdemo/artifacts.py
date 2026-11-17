@@ -1,7 +1,7 @@
 """Artifacts: fetch from the Hugging Face dataset repo, verify against the manifest, load.
 
 Serving needs the corpus (served from SQLite on disk), the HNSW index, the BM25 matrix and the encoder.
-Evaluation additionally uses the raw embedding matrices and the legacy 82k index.
+Evaluation additionally uses the raw embedding matrix and its int8 copy.
 """
 
 from __future__ import annotations
@@ -67,9 +67,6 @@ class Artifacts:
             f"emb_{s.encoder_tag}.npy",
             f"emb_{s.encoder_tag}_int8.npy",
             f"emb_{s.encoder_tag}_int8_scale.npy",
-            f"emb_{s.alt_encoder_tag}.npy",
-            "legacy/hnsw82k.index",
-            *_model_patterns(s.alt_encoder_name),
         ]
 
     def emb_path(self, tag: str | None = None) -> Path:
@@ -139,9 +136,6 @@ class Artifacts:
 
     def load_encoder(self) -> STEncoder:
         return self._encoder(self.s.encoder_name)
-
-    def load_alt_encoder(self) -> STEncoder:
-        return self._encoder(self.s.alt_encoder_name)
 
     def load_dense(self) -> DenseIndex:
         return DenseIndex.load(self.dir / f"hnsw_{self.s.encoder_tag}.index")

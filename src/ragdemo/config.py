@@ -7,7 +7,7 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SERVED_MODES = ("bm25", "dense", "hybrid", "hybrid_rerank")
-EVAL_ONLY_MODES = ("dense_base", "dense_int8", "dense_100k")
+EVAL_ONLY_MODES = ("dense_flat", "dense_int8", "dense_82k")
 
 
 class Settings(BaseSettings):
@@ -24,11 +24,9 @@ class Settings(BaseSettings):
     eval_dir: Path = Path("data/eval")
 
     # models
-    # the served encoder and the one kept for comparison: a Hub id, or a folder inside artifacts_dir
+    # the served encoder: a Hub id, or a folder inside artifacts_dir
     encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2"
     encoder_tag: str = "base"  # artifact suffix: hnsw_<tag>.index, emb_<tag>.npy, emb_<tag>_int8*.npy
-    alt_encoder_name: str = "minilm-l6-msmarco-ft"  # the earlier 5k-pair fine-tune; evaluation only
-    alt_encoder_tag: str = "ft"
     reranker_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     device: str = "cpu"  # "cuda" for the offline evaluation on a Colab GPU; the Space serves on CPU
     torch_threads: int = 0  # 0 keeps the torch default; 12 beat 16 by 30% on the hybrid-core build laptop

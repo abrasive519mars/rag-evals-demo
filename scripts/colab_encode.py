@@ -1,18 +1,20 @@
-"""One-shot Colab (T4) job: encode the corpus with both encoders, build the indexes, publish everything.
+"""One-shot Colab (T4) job: encode the corpus with an encoder, build its HNSW and int8 indexes, publish all.
 
 In a Colab notebook with a GPU runtime:
 
     !pip -q install sentence-transformers faiss-cpu huggingface_hub numpy
     !wget -q https://raw.githubusercontent.com/abrasive519mars/rag-evals-demo/main/scripts/colab_encode.py
-    import os; os.environ["HF_TOKEN"] = "hf_..."      # write token; revoke it afterwards
-    !python colab_encode.py
+    import os, getpass; os.environ["HF_TOKEN"] = getpass.getpass("HF write token: ")
+    !python colab_encode.py                       # --model <hub id> --tag <suffix> for another encoder
 
-About 10 minutes of encoding per model on a T4, then the HNSW build on the Colab CPU (about 10 minutes),
-then the upload (about 4 GB). Everything lands in the dataset repo with an updated manifest.
+About ten minutes of encoding on a T4, then the HNSW build on the Colab CPU (about ten minutes), then the
+upload (about 2.7 GB). Everything lands in the dataset repo as emb_<tag>.npy, hnsw_<tag>.index and
+emb_<tag>_int8*.npy, with an updated manifest.
 """
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -50,35 +52,37 @@ def encode(model_path: str, texts: list[str], out: Path, batch: int = 512) -> np
     return emb
 
 
-def build_indexes(emb: np.ndarray, out_dir: Path) -> None:
+def build_indexes(emb: np.ndarray, tag: str, out_dir: Path) -> list[str]:
     import faiss
 
     scale = np.abs(emb).max(axis=0).astype(np.float32) / 127.0
     scale[scale == 0] = 1.0
-    np.save(out_dir / "emb_ft_int8.npy", np.clip(np.rint(emb / scale), -127, 127).astype(np.int8))
-    np.save(out_dir / "emb_ft_int8_scale.npy", scale)
+    np.save(out_dir / f"emb_{tag}_int8.npy", np.clip(np.rint(emb / scale), -127, 127).astype(np.int8))
+    np.save(out_dir / f"emb_{tag}_int8_scale.npy", scale)
     t = time.time()
     index = faiss.IndexHNSWFlat(emb.shape[1], 32, faiss.METRIC_INNER_PRODUCT)
     index.hnsw.efConstruction = 200
     for lo in range(0, len(emb), 100_000):
         index.add(np.ascontiguousarray(emb[lo : lo + 100_000]))
         print(f"  hnsw {min(lo + 100_000, len(emb)):,}/{len(emb):,}", flush=True)
-    faiss.write_index(index, str(out_dir / "hnsw_ft.index"))
-    print(f"hnsw_ft.index built in {(time.time() - t) / 60:.1f} min", flush=True)
+    faiss.write_index(index, str(out_dir / f"hnsw_{tag}.index"))
+    print(f"hnsw_{tag}.index built in {(time.time() - t) / 60:.1f} min", flush=True)
+    return [f"hnsw_{tag}.index", f"emb_{tag}_int8.npy", f"emb_{tag}_int8_scale.npy"]
 
 
 def main() -> None:
-    from huggingface_hub import HfApi, hf_hub_download, snapshot_download
+    from huggingface_hub import HfApi, hf_hub_download
 
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--model", default="sentence-transformers/all-MiniLM-L6-v2")
+    p.add_argument("--tag", default="base", help="artifact suffix: emb_<tag>.npy, hnsw_<tag>.index")
+    args = p.parse_args()
     token = os.environ.get("HF_TOKEN") or sys.exit("set HF_TOKEN")
     api = HfApi(token=token)
     WORK.mkdir(exist_ok=True)
 
     corpus = Path(
         hf_hub_download(REPO, "corpus.jsonl", repo_type="dataset", token=token, local_dir=str(WORK))
-    )
-    snapshot_download(
-        REPO, repo_type="dataset", token=token, local_dir=str(WORK), allow_patterns=["minilm-l6-msmarco-ft/*"]
     )
     texts = []
     with corpus.open(encoding="utf-8") as f:
@@ -88,19 +92,16 @@ def main() -> None:
             texts.append(row["text"])
     print(f"{len(texts):,} passages", flush=True)
 
-    emb_ft = encode(str(WORK / "minilm-l6-msmarco-ft"), texts, WORK / "emb_ft.npy")
-    build_indexes(emb_ft, WORK)
-    del emb_ft
-    encode("sentence-transformers/all-MiniLM-L6-v2", texts, WORK / "emb_base.npy")
+    emb = encode(args.model, texts, WORK / f"emb_{args.tag}.npy")
+    produced = [f"emb_{args.tag}.npy"] + build_indexes(emb, args.tag, WORK)
 
-    produced = ["emb_ft.npy", "emb_base.npy", "emb_ft_int8.npy", "emb_ft_int8_scale.npy", "hnsw_ft.index"]
     manifest_path = Path(
         hf_hub_download(REPO, "manifest.json", repo_type="dataset", token=token, local_dir=str(WORK))
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     for name in produced:
-        p = WORK / name
-        manifest[name] = {"bytes": p.stat().st_size, "sha256": sha256(p)}
+        f = WORK / name
+        manifest[name] = {"bytes": f.stat().st_size, "sha256": sha256(f)}
     manifest_path.write_text(json.dumps(manifest, indent=1, sort_keys=True), encoding="utf-8")
 
     t = time.time()
@@ -109,7 +110,7 @@ def main() -> None:
         repo_id=REPO,
         repo_type="dataset",
         allow_patterns=produced + ["manifest.json"],
-        commit_message="Embeddings, HNSW and int8 indexes from Colab",
+        commit_message=f"Embeddings, HNSW and int8 indexes for the {args.tag} encoder from Colab",
     )
     print(f"uploaded in {(time.time() - t) / 60:.1f} min. Done.", flush=True)
 

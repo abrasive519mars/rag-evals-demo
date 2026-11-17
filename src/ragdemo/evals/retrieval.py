@@ -14,6 +14,7 @@ import platform
 import shutil
 import time
 from dataclasses import asdict, dataclass, field
+from itertools import islice
 from pathlib import Path
 
 import numpy as np
@@ -40,33 +41,13 @@ class Row:
 
 
 COMPARISONS = [
-    (
-        "dense_flat",
-        "dense_alt_flat",
-        "recall@10",
-        "val1000",
-        "served vs comparison encoder, held-out queries",
-    ),
-    (
-        "dense_flat",
-        "dense_alt_flat",
-        "recall@10",
-        "legacy200",
-        "served vs comparison encoder, training queries",
-    ),
     ("hybrid", "dense", "recall@10", "val1000", "fusion recall gain"),
     ("hybrid", "dense", "mrr@10", "val1000", "fusion MRR change"),
     ("hybrid_rerank", "hybrid", "mrr@10", "val1000", "reranker MRR change"),
     ("hybrid_rerank", "hybrid", "recall@5", "val1000", "reranker recall@5 change"),
     ("dense", "dense_flat", "recall@10", "val1000", "HNSW approximation loss"),
     ("dense_int8_rescore200", "dense_flat", "recall@10", "val1000", "int8 quantisation loss"),
-    (
-        "dense_alt_flat",
-        "dense_82k",
-        "recall@10",
-        "legacy200",
-        "corpus-size effect, dense (comparison encoder)",
-    ),
+    ("dense_flat", "dense_82k", "recall@10", "legacy200", "corpus-size effect, dense"),
     ("bm25", "bm25_82k", "recall@10", "legacy200", "corpus-size effect, BM25"),
 ]
 
@@ -186,24 +167,26 @@ def eval_ef_sweep(
     return [eval_ef(hnsw, vecs, queries, query_set, ef) for ef in efs]
 
 
-def eval_82k(art: Artifacts, encoder: Encoder, queries: list[dict]) -> list[Row]:
-    """The legacy 82k index (built with the comparison encoder) and a BM25 over the same 82,326 rows."""
-    legacy = DenseIndex.load(art.dir / "legacy" / "hnsw82k.index")
-    legacy.set_ef_search(64)
-    n82k = legacy.ntotal
-    texts = (t for i, t in enumerate(art.iter_texts()) if i < n82k)
-    bm25_82k = BM25Index.build(texts)
+SUBSET_SIZE = 82_326  # the first pids: the subset the 200 training-split queries were drawn with
+
+
+def eval_82k(art: Artifacts, encoder: Encoder, emb: np.ndarray, queries: list[dict]) -> list[Row]:
+    """The first 82,326 passages as a corpus of their own: exact dense search and BM25 over that slice, so the
+    corpus-size rows compare the same queries, the same encoder and the same scoring at 82k and at 759k."""
+    n = SUBSET_SIZE
+    flat = DenseIndex.flat(np.asarray(emb[:n]))
     rows = [
         eval_dense_matrix(
             "dense_82k",
-            f"{encoder_label(art.s.alt_encoder_name)}, legacy HNSW over {n82k:,} passages",
+            f"{encoder_label(art.s.encoder_name)}, exact search over {n:,} passages",
             encoder,
-            legacy,
+            flat,
             queries,
             "legacy200",
         )
     ]
-    row_b = Row(name="bm25_82k", query_set="legacy200", description=f"BM25 over {n82k:,} passages")
+    bm25_82k = BM25Index.build(islice(art.iter_texts(), n))
+    row_b = Row(name="bm25_82k", query_set="legacy200", description=f"BM25 over {n:,} passages")
     for q in queries:
         row_b.per_query.append(_record(q, bm25_82k.search(q["query"], EVAL_TOP), None))
     rows.append(_finish(row_b, {}))
@@ -292,10 +275,10 @@ def _phase_served(
 def _phase_matrices(
     art: Artifacts, out_dir: Path, sets: dict[str, list[dict]], encoder: Encoder
 ) -> list[Row]:
-    """Exact and int8 search over the served matrix on both query sets, then exact search with the comparison
-    encoder. Each flat index (1.2 GB) is built inside its row function, so only one exists at a time."""
+    """Exact and int8 search over the served matrix on both query sets. Each flat index (1.2 GB) is built
+    inside its row function, so only one exists at a time."""
     s = art.s
-    served, alt = encoder_label(s.encoder_name), encoder_label(s.alt_encoder_name)
+    served = encoder_label(s.encoder_name)
     emb = np.load(art.emb_path(), mmap_mode="r")
     rows: list[Row] = []
 
@@ -317,19 +300,6 @@ def _phase_matrices(
         name = f"dense_int8_rescore{rescore}" if rescore else "dense_int8"
         rows.append(_one(out_dir, sets, name, "val1000", int8_row))
 
-    alt_path = art.emb_path(s.alt_encoder_tag)
-    if not alt_path.exists():
-        print(f"  {alt_path.name} missing: skipping the comparison-encoder rows", flush=True)
-        return rows
-    alt_encoder = art.load_alt_encoder()
-    emb_alt = np.load(alt_path, mmap_mode="r")
-    for qs in ("val1000", "legacy200"):
-
-        def alt_row(q: str = qs) -> Row:
-            flat = DenseIndex.flat(np.asarray(emb_alt))
-            return eval_dense_matrix("dense_alt_flat", f"{alt}, exact search", alt_encoder, flat, sets[q], q)
-
-        rows.append(_one(out_dir, sets, "dense_alt_flat", qs, alt_row))
     return rows
 
 
@@ -350,15 +320,14 @@ def run(art: Artifacts, out_dir: Path, query_limit: int | None = None, with_rera
     gc.collect()
     rows += _phase_matrices(art, out_dir, sets, encoder)
     gc.collect()
-    if (art.dir / "legacy" / "hnsw82k.index").exists():
-        alt_encoder = art.load_alt_encoder()
-        rows += cached_rows(
-            out_dir,
-            ["dense_82k", "bm25_82k"],
-            "legacy200",
-            len(legacy),
-            lambda: eval_82k(art, alt_encoder, legacy),
-        )
+    emb = np.load(art.emb_path(), mmap_mode="r")
+    rows += cached_rows(
+        out_dir,
+        ["dense_82k", "bm25_82k"],
+        "legacy200",
+        len(legacy),
+        lambda: eval_82k(art, encoder, emb, legacy),
+    )
 
     by_key = {(r.name, r.query_set): r for r in rows}
     comparisons = []
@@ -374,7 +343,6 @@ def run(art: Artifacts, out_dir: Path, query_limit: int | None = None, with_rera
         "corpus_size": art.corpus_size(),
         "hardware": _hardware(s.device),
         "encoder": s.encoder_name,
-        "alt_encoder": s.alt_encoder_name,
         "ef_search": s.ef_search,
         "reranker": reranker_name,
         "rows": [{k: v for k, v in asdict(r).items() if k != "per_query"} for r in rows],

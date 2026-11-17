@@ -79,7 +79,7 @@
 
   <section id="about">
     <div class="card">
-      <p>One service, five retrieval configurations, every choice measured. Sparse BM25 stored as a term-weight matrix, a MiniLM encoder fine-tuned on MS MARCO over an HNSW index, reciprocal rank fusion, and a cross-encoder reranker. Gemini writes the answer from the retrieved passages and must cite each claim; a judge from a different model family grades faithfulness and correctness.</p>
+      <p>One service, five retrieval configurations, every choice measured. Sparse BM25 stored as a term-weight matrix, a MiniLM encoder over an HNSW index, reciprocal rank fusion, and a cross-encoder reranker. Gemini writes the answer from the retrieved passages and must cite each claim; a judge from a different model family grades faithfulness and correctness.</p>
       <p>Design: <code>docs/design.md</code>. Build notes: <code>docs/build-log.md</code>. Findings: <code>docs/findings.md</code>. Source on GitHub: <code>abrasive519mars/rag-evals-demo</code>.</p>
       <p class="muted">Citations open the passage below the answer. Repeated questions are served from an exact-match cache and marked as such.</p>
     </div>
@@ -176,7 +176,7 @@ async function loadEvals() {
   if (d.retrieval_report) {
     const rep = d.retrieval_report; const rows = rep.rows;
     const find = (n, qs) => rows.find(r => r.name === n && r.query_set === qs);
-    const order = [['bm25','BM25'],['dense_base','Dense, base MiniLM, exact'],['dense_flat','Dense, fine-tuned, exact'],['dense','Dense, fine-tuned, HNSW'],['dense_int8_rescore200','Dense, int8 + rescore 200'],['hybrid','Hybrid (RRF)'],['hybrid_rerank','Hybrid + rerank']];
+    const order = [['bm25','BM25'],['dense_flat','Dense, exact'],['dense','Dense, HNSW (served)'],['dense_int8_rescore200','Dense, int8 + rescore 200'],['hybrid','Hybrid (RRF)'],['hybrid_rerank','Hybrid + rerank']];
     html += `<div class="card"><strong>Retrieval, val1000 (held out), ${rep.corpus_size.toLocaleString()} passages</strong>` +
       table(['Configuration','R@1','R@5','R@10','R@20','MRR@10','nDCG@10','p50 ms'],
         order.map(([n, label]) => find(n, 'val1000')).filter(Boolean).map(r => [order.find(o => o[0] === r.name)[1], pct(r.metrics['recall@1']), pct(r.metrics['recall@5']), pct(r.metrics['recall@10']), pct(r.metrics['recall@20']), pct(r.metrics['mrr@10']), pct(r.metrics['ndcg@10']), ms(r,'total') || ms(r,'dense') || ms(r,'dense_batch_avg')])) + '</div>';

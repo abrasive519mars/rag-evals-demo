@@ -37,12 +37,11 @@ def retrieval_tables(rep: dict) -> str:
     )
     out.append("| Configuration | R@1 | R@5 | R@10 | R@20 | MRR@10 | nDCG@10 | p50 ms |")
     out.append("|---|---|---|---|---|---|---|---|")
-    enc, alt = _short(rep.get("encoder", "")), _short(rep.get("alt_encoder", ""))
+    enc = _short(rep.get("encoder", ""))
     order = [
         ("bm25", "BM25 (sparse matrix)"),
         ("dense_flat", f"Dense, {enc}, exact"),
         ("dense", f"Dense, {enc}, HNSW efSearch {rep.get('ef_search', '?')} (served)"),
-        ("dense_alt_flat", f"Dense, {alt}, exact (comparison)"),
         ("hybrid", "Hybrid (RRF of BM25 and dense)"),
         ("hybrid_rerank", "Hybrid + cross-encoder rerank (depth 50)"),
     ]
@@ -57,28 +56,14 @@ def retrieval_tables(rep: dict) -> str:
             f"{_pct(m.get('recall@20'))} | {_pct(m.get('mrr@10'))} | {_pct(m.get('ndcg@10'))} | {lat} |"
         )
 
-    enc_rows = [
-        _find(rows, n, qs) for n in ("dense_flat", "dense_alt_flat") for qs in ("val1000", "legacy200")
-    ]
-    if all(enc_rows):
-        out.append(
-            "\nEncoder comparison, exact search, R@10 in percent. The comparison model is the served model fine-tuned "
-            "on 5,000 MS MARCO pairs; `legacy200` queries come from that training split.\n"
-        )
-        out.append("| Encoder | val1000 (held out) | legacy200 (training queries) |")
-        out.append("|---|---|---|")
-        for name, label in (("dense_flat", enc), ("dense_alt_flat", alt)):
-            a, b = _find(rows, name, "val1000"), _find(rows, name, "legacy200")
-            out.append(f"| {label} | {_pct(a['metrics']['recall@10'])} | {_pct(b['metrics']['recall@10'])} |")
-
     out.append(
-        "\nCorpus size, same 200 queries (`legacy200`), the old 82k corpus versus the full corpus. R@10 in percent.\n"
+        "\nCorpus size, same 200 queries (`legacy200`), the 82k subset those queries were drawn with versus the full corpus. R@10 in percent.\n"
     )
     out.append("| Mode | 82,326 passages | Full corpus | Change |")
     out.append("|---|---|---|---|")
     for small, big, label in (
         ("bm25_82k", "bm25", "BM25"),
-        ("dense_82k", "dense_alt_flat", f"Dense, {alt}"),
+        ("dense_82k", "dense_flat", "Dense, exact"),
     ):
         a, b = _find(rows, small, "legacy200"), _find(rows, big, "legacy200")
         if a and b:

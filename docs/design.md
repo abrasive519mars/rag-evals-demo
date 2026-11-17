@@ -4,16 +4,16 @@ Version 2.1, 15 November 2026 (corpus scaled from the 100k subset to the full MS
 
 ## 1. Purpose and scope
 
-A single deployable system that demonstrates retrieval-augmented question answering over a corpus of about one million passages, with measured retrieval quality, answer quality and latency across a ladder of retrieval configurations, and a measured comparison against the same system on a 100k subset. It supersedes `hybrid-search-engine`, whose fine-tuned encoder and 100k artifacts become this system's starting point.
+A single deployable system that demonstrates retrieval-augmented question answering over a corpus of about one million passages, with measured retrieval quality, answer quality and latency across a ladder of retrieval configurations, and a measured comparison against the same system on a 100k subset. It supersedes `hybrid-search-engine`, whose 100k artifacts become this system's starting point.
 
 In scope:
 
-- Retrieval pipeline: sparse (BM25), dense (fine-tuned MiniLM over FAISS HNSW), reciprocal rank fusion, cross-encoder reranking.
+- Retrieval pipeline: sparse (BM25), dense (MiniLM over FAISS HNSW), reciprocal rank fusion, cross-encoder reranking.
 - Grounded generation with inline citations, streamed.
 - Evaluation harness: retrieval metrics on 200 human-labelled queries, judge-based answer metrics, per-stage latency, reproducible report.
 - HTTP API, static single-page UI, tests, CI, container image, Hugging Face Space deployment, README and findings writeup.
 
-Out of scope: multi-tenancy, authentication, billing, conversation history, agents, external vector databases, model routing, semantic caching, training code (the fine-tuned encoder is an input artifact). PDF ingestion is an optional final stage.
+Out of scope: multi-tenancy, authentication, billing, conversation history, agents, external vector databases, model routing, semantic caching, training code (the encoder is a stock model). PDF ingestion is an optional final stage.
 
 ## 2. Data and artifacts
 
@@ -25,7 +25,6 @@ MS MARCO v1.1 (`microsoft/ms_marco`, config `v1.1`, on the Hugging Face Hub): re
 
 | Artifact | Format | Size | Fate |
 |---|---|---|---|
-| `fine_tuned_ieee_model/` | sentence-transformers, MiniLM-L6, 384-d | 88 MB | kept; published as `minilm-l6-msmarco-ft` |
 | `corpus_subset.jsonl` | JSONL, 100k passages | 35 MB | kept as the 100k comparison subset; becomes a subset of the full corpus |
 | `fine_tuned_hnsw.index` | FAISS `IndexHNSWFlat`, 100k x 384 | 142 MB | kept for the 100k rows of the comparison |
 | `eval_set.json` | 200 queries with gold passage ids | 24 KB | kept as the `legacy200` query set, used for the 100k-versus-1M comparison and for answer metrics |
@@ -38,15 +37,15 @@ Built by `scripts/build_corpus.py` (local) and `scripts/encode.py` (Colab T4), p
 | Artifact | Format | Size (approx.) | Role |
 |---|---|---|---|
 | `corpus.jsonl` | JSONL `{pid, text}`, about 1M passages, deduplicated; includes every passage of the 100k subset | 350 MB | passage corpus; served from SQLite on disk, not held in RAM |
-| `emb_ft.npy` | float32, 1M x 384, L2-normalised | 1.5 GB | fine-tuned encoder vectors; source for the HNSW, flat and int8 indexes |
+| `emb_base.npy` | float32, 1M x 384, L2-normalised | 1.5 GB | encoder vectors; source for the HNSW, flat and int8 indexes |
 | `emb_base.npy` | float32, 1M x 384 | 1.5 GB | base `all-MiniLM-L6-v2` vectors; evaluation only, not served |
-| `hnsw_ft.index` | FAISS `IndexHNSWFlat`, M = 32, efConstruction = 200 | 1.8 GB | served dense index |
-| `emb_ft_int8.npy` + scale | int8, 1M x 384 | 384 MB | quantised row; rescoring against float32 for the top candidates |
+| `hnsw_base.index` | FAISS `IndexHNSWFlat`, M = 32, efConstruction = 200 | 1.8 GB | served dense index |
+| `emb_base_int8.npy` + scale | int8, 1M x 384 | 384 MB | quantised row; rescoring against float32 for the top candidates |
 | `bm25.npz` + `vocab.json` | SciPy CSR term weights | 400 MB | served sparse index (4.2) |
 | `eval/queries.jsonl` | `{qid, set, query, gold_pids, answers, unanswerable}` | 1 MB | `legacy200` plus `val1000`: 1,000 validation-split queries whose selected passage is in the corpus |
 | `manifest.json` | file names, sizes, SHA-256 | | integrity check at download |
 
-Serving downloads `corpus.jsonl`, `hnsw_ft.index`, `bm25.npz`, `vocab.json`, the encoder and the cross-encoder (about 2.6 GB). Evaluation additionally uses `emb_ft.npy`, `emb_base.npy` and `emb_ft_int8.npy` and runs locally or in Colab, not on the Space.
+Serving downloads `corpus.jsonl`, `hnsw_base.index`, `bm25.npz`, `vocab.json` and the cross-encoder (about 2.6 GB); the encoder comes from the Hub. Evaluation additionally uses `emb_base.npy` and `emb_base_int8.npy` and runs locally or in Colab, not on the Space.
 
 ## 3. Architecture
 
@@ -67,9 +66,8 @@ Data flow for one question: encode the query (PyTorch, CPU) in parallel with BM2
 
 ### 4.1 Dense
 
-Fine-tuned MiniLM, 384 dimensions, cosine similarity as inner product on L2-normalised vectors. FAISS HNSW (M = 32, efConstruction = 200); `efSearch` is a runtime parameter swept in evaluation. A flat exact index over `emb_ft.npy` measures HNSW recall loss. Three further dense configurations exist for evaluation only:
+Stock `all-MiniLM-L6-v2`, 384 dimensions, cosine similarity as inner product on L2-normalised vectors. FAISS HNSW (M = 32, efConstruction = 200); `efSearch` is a runtime parameter swept in evaluation. A flat exact index over `emb_base.npy` measures HNSW recall loss. Two further dense configurations exist for evaluation only:
 
-- `dense_base`: the base `all-MiniLM-L6-v2` encoder over the same corpus, so the effect of fine-tuning is a measured number rather than a claim.
 - `dense_int8`: vectors quantised to int8 with a per-dimension scale, exact search over int8, top 200 rescored with float32. Measures the memory-versus-recall trade of quantisation.
 - `dense@100k`: the original 100k index with the `legacy200` queries, so the same queries are scored at 100k and at 1M and the effect of corpus size is isolated.
 
@@ -87,7 +85,7 @@ Reciprocal rank fusion, k = 60, over the sparse and dense candidate lists, each 
 
 ### 4.5 Modes
 
-`bm25`, `dense_base`, `dense`, `hybrid`, `hybrid_rerank`. `k_final` defaults to 5 for generation. Retrieval metrics are reported at k in {1, 3, 5, 10, 20}.
+`bm25`, `dense`, `hybrid`, `hybrid_rerank`. `k_final` defaults to 5 for generation. Retrieval metrics are reported at k in {1, 3, 5, 10, 20}.
 
 ## 5. Generation design
 
@@ -157,7 +155,6 @@ Image: `python:3.12-slim`, CPU PyTorch wheel, faiss-cpu, SciPy; encoder and cros
 - Judge volume: 200 queries x 5 modes x 2 judge calls = 2,000 calls, within limits with backoff.
 - API rate limits during evaluation generation (about 1,000 calls): backoff, background run.
 - Image size with CPU PyTorch about 1.5 GB: acceptable on Spaces; ONNX export is the fallback.
-- The fine-tuned encoder may not beat the base encoder on this evaluation; that result is reported either way.
 
 ## 12. Open assumptions
 
