@@ -8,7 +8,7 @@ In a Colab notebook with a GPU runtime:
     !python colab_eval.py --retrieval
 
 For the answer evaluation add the Gemini key the same way (GEMINI_API_KEY), start the judge server with
-colab_judge_server.py, export JUDGE_BASE_URL, JUDGE_MODEL and JUDGE_WORKERS, then run `--answers --judge openai`.
+colab_judge_server.py, export JUDGE_BASE_URL, JUDGE_MODEL, JUDGE_WORKERS, and run `--answers --judge openai`.
 
 Generations and judge verdicts are cached; the cache is stored on the dataset repo as cache.tar between
 runs, so a run that stops at a rate limit or a runtime reset resumes where it left off.
