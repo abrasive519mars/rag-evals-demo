@@ -53,7 +53,10 @@ def main() -> None:
         "--served-model-name",
         args.model,
     ]
-    subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    # stdin from /dev/null so the server does not hold the notebook cell's terminal open
+    subprocess.Popen(
+        cmd, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True
+    )
     url = f"http://127.0.0.1:{args.port}/health"
     t0 = time.time()
     while time.time() - t0 < 1500:

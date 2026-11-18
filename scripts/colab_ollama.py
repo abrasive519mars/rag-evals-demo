@@ -53,9 +53,16 @@ def main() -> None:
         "OLLAMA_KEEP_ALIVE": "-1",
         "OLLAMA_CONTEXT_LENGTH": "8192",
     }
-    log = open("ollama.log", "w")  # noqa: SIM115 - the server outlives this script
+    log = open("ollama.log", "a")  # noqa: SIM115 - the server outlives this script
+    # stdin from /dev/null: a server that inherits the notebook cell's terminal keeps the cell "running"
+    # for as long as the server lives, because Colab waits for the terminal to close.
     subprocess.Popen(
-        ["ollama", "serve"], env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True
+        ["ollama", "serve"],
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
     )
     if not wait(f"http://127.0.0.1:{PORT}/api/version", 120):
         sys.exit("Ollama did not start; see ollama.log")
