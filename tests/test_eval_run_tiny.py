@@ -115,6 +115,9 @@ def test_retrieval_eval_runs_end_to_end_on_a_tiny_corpus(tmp_path):
     assert "reranker MRR change" in labels and "corpus-size effect, BM25" in labels
     served = next(r for r in report["rows"] if r["name"] == "dense" and r["query_set"] == "val1000")
     assert served["metrics"]["recall@10"] > 0.5  # the tiny corpus is trivially searchable
+    for r in report["rows"]:  # every pipeline row is measured at the efSearch the API serves
+        if r["description"].startswith("served mode"):
+            assert r["config"]["ef_search"] == settings.ef_search, r["name"]
     assert (out / "retrieval_report.json").exists() and (out / "retrieval_per_query.jsonl").exists()
     assert not (out / ".checkpoint").exists()
 

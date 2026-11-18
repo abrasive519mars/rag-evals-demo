@@ -71,6 +71,12 @@ def test_bm25_mode_drops_zero_score_documents(retriever):
     assert [h.pid for h in res.hits] == [5]
 
 
+def test_config_default_ef_search_equals_the_served_setting():
+    from ragdemo.config import Settings
+
+    assert RetrievalConfig(mode="dense").ef_search == Settings.model_fields["ef_search"].default
+
+
 def test_config_rejects_bad_values():
     with pytest.raises(ValueError):
         RetrievalConfig(mode="nope")

@@ -18,7 +18,7 @@ class RetrievalConfig:
     k_candidates: int = 50
     k_final: int = 5
     rerank_depth: int = 50
-    ef_search: int = 64
+    ef_search: int = 128  # equal to Settings.ef_search; a test pins the two together
     rrf_k: int = 60
 
     def __post_init__(self) -> None:

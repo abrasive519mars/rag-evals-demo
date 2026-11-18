@@ -40,6 +40,9 @@ def main() -> None:
     args = p.parse_args()
 
     if subprocess.run(["which", "ollama"], capture_output=True).returncode != 0:
+        if subprocess.run(["which", "zstd"], capture_output=True).returncode != 0:
+            # the installer unpacks a .tar.zst and Colab images do not ship zstd
+            subprocess.run("apt-get -qq update && apt-get -qq install -y zstd", shell=True, check=True)
         print("installing Ollama...", flush=True)
         subprocess.run("curl -fsSL https://ollama.com/install.sh | sh", shell=True, check=True)
 

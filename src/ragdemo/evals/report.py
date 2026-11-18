@@ -33,15 +33,19 @@ def retrieval_tables(rep: dict) -> str:
     out = []
     out.append(
         f"Retrieval on `val1000` (1,000 held-out MS MARCO queries) over {rep['corpus_size']:,} passages. "
-        "Metrics in percent; latency is p50 per query on the machine below.\n"
+        "Metrics in percent; latency is p50 per query through the served pipeline on the machine below "
+        "(exact search is an evaluation-only ceiling, run in batches and not timed per query).\n"
     )
     out.append("| Configuration | R@1 | R@5 | R@10 | R@20 | MRR@10 | nDCG@10 | p50 ms |")
     out.append("|---|---|---|---|---|---|---|---|")
     enc = _short(rep.get("encoder", ""))
+    # the label states the efSearch the served row was measured at, not the report-level setting
+    served = _find(rows, "dense", "val1000") or {}
+    ef = served.get("config", {}).get("ef_search", rep.get("ef_search", "?"))
     order = [
         ("bm25", "BM25 (sparse matrix)"),
         ("dense_flat", f"Dense, {enc}, exact"),
-        ("dense", f"Dense, {enc}, HNSW efSearch {rep.get('ef_search', '?')} (served)"),
+        ("dense", f"Dense, {enc}, HNSW efSearch {ef} (served)"),
         ("hybrid", "Hybrid (RRF of BM25 and dense)"),
         ("hybrid_rerank", "Hybrid + cross-encoder rerank (depth 50)"),
     ]
@@ -50,7 +54,7 @@ def retrieval_tables(rep: dict) -> str:
         if not r:
             continue
         m = r["metrics"]
-        lat = _ms(r) or _ms(r, "dense") or _ms(r, "dense_batch_avg")
+        lat = _ms(r)
         out.append(
             f"| {label} | {_pct(m.get('recall@1'))} | {_pct(m.get('recall@5'))} | {_pct(m.get('recall@10'))} | "
             f"{_pct(m.get('recall@20'))} | {_pct(m.get('mrr@10'))} | {_pct(m.get('ndcg@10'))} | {lat} |"
@@ -97,12 +101,10 @@ def retrieval_tables(rep: dict) -> str:
     ]
     int8_rows = [r for r in int8_rows if r]
     if int8_rows:
-        sweeps.append("\n| int8 rescoring depth | R@10 | MRR@10 | p50 ms |\n|---|---|---|---|")
+        sweeps.append("\n| int8 rescoring depth | R@10 | MRR@10 |\n|---|---|---|")
         for r in int8_rows:
             depth = r["name"].replace("dense_int8_rescore", "").replace("dense_int8", "0")
-            sweeps.append(
-                f"| {depth} | {_pct(r['metrics']['recall@10'])} | {_pct(r['metrics']['mrr@10'])} | {_ms(r, 'dense')} |"
-            )
+            sweeps.append(f"| {depth} | {_pct(r['metrics']['recall@10'])} | {_pct(r['metrics']['mrr@10'])} |")
     if sweeps:
         out.append("\nSweeps on `val1000`:\n")
         out.extend(sweeps)

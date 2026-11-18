@@ -41,7 +41,7 @@ class Row:
 
 
 COMPARISONS = [
-    ("hybrid", "dense", "recall@10", "val1000", "fusion recall gain"),
+    ("hybrid", "dense", "recall@10", "val1000", "fusion recall change"),
     ("hybrid", "dense", "mrr@10", "val1000", "fusion MRR change"),
     ("hybrid_rerank", "hybrid", "mrr@10", "val1000", "reranker MRR change"),
     ("hybrid_rerank", "hybrid", "recall@5", "val1000", "reranker recall@5 change"),
@@ -92,8 +92,13 @@ def _finish(row: Row, latencies: dict[str, list[float]]) -> Row:
 
 
 # ----- served modes through the pipeline ---------------------------------------------------------------
-def eval_served(retriever: Retriever, queries: list[dict], query_set: str, mode: str, **overrides) -> Row:
-    cfg = RetrievalConfig(mode=mode, k_candidates=max(50, EVAL_TOP), k_final=EVAL_TOP, **overrides)
+def eval_served(
+    retriever: Retriever, queries: list[dict], query_set: str, mode: str, ef_search: int, **overrides
+) -> Row:
+    """`ef_search` is the served setting, passed in so each row is measured at the value the API uses."""
+    cfg = RetrievalConfig(
+        mode=mode, k_candidates=max(50, EVAL_TOP), k_final=EVAL_TOP, ef_search=ef_search, **overrides
+    )
     row = Row(
         name=mode if not overrides else f"{mode}_" + "_".join(f"{k}{v}" for k, v in overrides.items()),
         query_set=query_set,
@@ -249,17 +254,20 @@ def _phase_served(
     reranker = art.load_reranker() if with_rerank else None
     retriever = Retriever(encoder, hnsw, sparse, art.texts, reranker=reranker)
     rows: list[Row] = []
+    ef = art.s.ef_search
     modes = ("bm25", "dense", "hybrid") + (("hybrid_rerank",) if with_rerank else ())
     for mode in modes:
         for qs in ("val1000", "legacy200"):
-            rows.append(
-                _one(out_dir, sets, mode, qs, lambda m=mode, q=qs: eval_served(retriever, sets[q], q, m))
-            )
+
+            def served_row(m: str = mode, q: str = qs) -> Row:
+                return eval_served(retriever, sets[q], q, m, ef)
+
+            rows.append(_one(out_dir, sets, mode, qs, served_row))
     if with_rerank:
         for depth in (20, 100):
 
             def depth_row(d: int = depth) -> Row:
-                return eval_served(retriever, val, "val1000", "hybrid_rerank", rerank_depth=d)
+                return eval_served(retriever, val, "val1000", "hybrid_rerank", ef, rerank_depth=d)
 
             rows.append(_one(out_dir, sets, f"hybrid_rerank_rerank_depth{depth}", "val1000", depth_row))
     vecs = encoder.encode_batch([q["query"] for q in val])

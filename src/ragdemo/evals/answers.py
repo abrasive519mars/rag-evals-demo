@@ -130,7 +130,7 @@ def run(
     rows: list[AnswerRow] = []
     t_all = time.time()
     for mode in modes:
-        cfg = RetrievalConfig(mode=mode, k_final=k_final)
+        cfg = RetrievalConfig(mode=mode, k_final=k_final, ef_search=art.s.ef_search)
         row = AnswerRow(mode=mode)
         gen_ms: list[float] = []
 

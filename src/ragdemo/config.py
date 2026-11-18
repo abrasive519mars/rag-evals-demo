@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     k_candidates: int = 50
     k_final: int = 5
     rerank_depth: int = 50
-    ef_search: int = 128  # the sweep: 64 loses 2.4 points to exact, 128 loses 1.4 at 0.7 ms
+    ef_search: int = 128  # val1000 sweep: 64 loses 0.8 points of R@10 to exact search, 128 loses none
     rrf_k: int = 60
 
     # serving

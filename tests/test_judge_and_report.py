@@ -59,7 +59,7 @@ def _retrieval_report():
         "hardware": {"processor": "cpu", "cpus": 22, "os": "Windows"},
         "rows": [
             row("bm25", "val1000", 0.55, 0.40, 12.0),
-            row("dense", "val1000", 0.80, 0.60, 20.0),
+            row("dense", "val1000", 0.80, 0.60, 20.0, {"ef_search": 64}),
             row("hybrid", "val1000", 0.85, 0.58, 30.0),
             row("bm25_82k", "legacy200", 0.70, 0.5),
             row("bm25", "legacy200", 0.60, 0.4),
@@ -87,6 +87,12 @@ def test_retrieval_tables_render_rows_comparisons_and_sweeps():
     assert "| BM25 | 70.0 | 60.0 | -10.0 |" in md
     assert "| 32 | 79.0 |" in md
     assert "| fusion (hybrid vs dense) | recall@10 | val1000 | +5.0 | [+2.0, +8.0] | yes |" in md
+
+
+def test_served_row_label_states_the_ef_search_it_was_measured_at():
+    rep = _retrieval_report() | {"ef_search": 128, "encoder": "sentence-transformers/all-MiniLM-L6-v2"}
+    md = retrieval_tables(rep)
+    assert "HNSW efSearch 64 (served)" in md  # the row's own config wins over the report-level setting
 
 
 def test_answers_table_and_readme_markers(tmp_path):

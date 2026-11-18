@@ -97,9 +97,10 @@ def main() -> None:
         )
         if check.returncode != 0:
             sys.exit(
-                "DEVICE=cuda but this torch cannot see the GPU (a pip install replaced it with a CPU build, "
-                "or the runtime is not a GPU runtime). Fix: !pip -q install torch --index-url "
-                "https://download.pytorch.org/whl/cu126  then rerun this cell; or set DEVICE=cpu."
+                "DEVICE=cuda but this torch cannot see the GPU. Check Runtime > Change runtime type first: a "
+                "CPU runtime is the usual cause. On a GPU runtime with a CPU build of torch, run "
+                "!pip -q install --force-reinstall torch torchvision torchaudio --index-url "
+                "https://download.pytorch.org/whl/cu126  and rerun this cell; or set DEVICE=cpu."
             )
 
     api = HfApi(token=token)
