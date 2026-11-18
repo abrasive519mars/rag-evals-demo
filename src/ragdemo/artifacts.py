@@ -11,6 +11,8 @@ import hashlib
 import json
 import sqlite3
 import sys
+import threading
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 from .config import Settings, get_settings
@@ -36,6 +38,8 @@ class Artifacts:
         self.s = settings or get_settings()
         self.dir = Path(self.s.artifacts_dir)
         self._db: sqlite3.Connection | None = None
+        self._db_lock = threading.Lock()
+        self._db_built = False
 
     # ----- fetch and verify ----------------------------------------------------------------
     def ensure(self, patterns: list[str] | None = None) -> None:
@@ -91,43 +95,75 @@ class Artifacts:
         return out
 
     # ----- corpus ----------------------------------------------------------------------------
-    def corpus_db(self) -> sqlite3.Connection:
-        if self._db is not None:
-            return self._db
-        jsonl = self.dir / "corpus.jsonl"
+    def _corpus_db_path(self) -> Path:
+        """corpus.sqlite, built from corpus.jsonl when it is missing or older. Call with the lock held."""
         db_path = self.dir / "corpus.sqlite"
-        rebuild = not db_path.exists() or db_path.stat().st_mtime < jsonl.stat().st_mtime
-        db = sqlite3.connect(db_path, check_same_thread=False)
-        if rebuild:
-            db.executescript(
-                "DROP TABLE IF EXISTS passages;"
-                "CREATE TABLE passages (pid INTEGER PRIMARY KEY, text TEXT NOT NULL, url TEXT NOT NULL);"
-            )
-            with jsonl.open(encoding="utf-8") as f, db:
-                db.executemany(
-                    "INSERT INTO passages VALUES (?, ?, ?)",
-                    ((r["pid"], r["text"], r["url"]) for r in map(json.loads, f)),
+        if self._db_built:
+            return db_path
+        jsonl = self.dir / "corpus.jsonl"
+        if not db_path.exists() or db_path.stat().st_mtime < jsonl.stat().st_mtime:
+            db = sqlite3.connect(db_path)
+            try:
+                db.executescript(
+                    "DROP TABLE IF EXISTS passages;"
+                    "CREATE TABLE passages (pid INTEGER PRIMARY KEY, text TEXT NOT NULL, url TEXT NOT NULL);"
                 )
-        self._db = db
-        return db
+                with jsonl.open(encoding="utf-8") as f, db:
+                    db.executemany(
+                        "INSERT INTO passages VALUES (?, ?, ?)",
+                        ((r["pid"], r["text"], r["url"]) for r in map(json.loads, f)),
+                    )
+            finally:
+                db.close()
+        self._db_built = True
+        return db_path
+
+    def _query(self, sql: str, params: Sequence = ()) -> list[tuple]:
+        """Run one lookup and return all of its rows. Lookups run one at a time, whatever thread they come
+        from: Python's sqlite3 keeps a single prepared statement per SQL string on a connection, so two
+        threads running the same query at once bind and step the same statement, and each can come back
+        with the other's rows without any error being raised."""
+        with self._db_lock:
+            if self._db is None:
+                self._db = sqlite3.connect(self._corpus_db_path(), check_same_thread=False)
+            return self._db.execute(sql, params).fetchall()
+
+    def close(self) -> None:
+        with self._db_lock:
+            if self._db is not None:
+                self._db.close()
+                self._db = None
 
     def corpus_size(self) -> int:
-        return int(self.corpus_db().execute("SELECT COUNT(*) FROM passages").fetchone()[0])
+        return int(self._query("SELECT COUNT(*) FROM passages")[0][0])
 
     def passages(self, pids: list[int]) -> dict[int, dict]:
+        """Every pid asked for comes back, or the call raises. An index that points outside the corpus has
+        to stop the run, not turn into an answer written from fewer passages than were retrieved."""
         if not pids:
             return {}
         marks = ",".join("?" * len(pids))
-        cur = self.corpus_db().execute(f"SELECT pid, text, url FROM passages WHERE pid IN ({marks})", pids)
-        return {pid: {"pid": pid, "text": text, "url": url} for pid, text, url in cur.fetchall()}
+        rows = self._query(f"SELECT pid, text, url FROM passages WHERE pid IN ({marks})", pids)
+        found = {pid: {"pid": pid, "text": text, "url": url} for pid, text, url in rows}
+        missing = sorted(set(pids) - found.keys())
+        if missing:
+            raise KeyError(f"{len(missing)} pid(s) not in the corpus, first: {missing[:5]}")
+        return found
 
     def texts(self, pids: list[int]) -> dict[int, str]:
         return {pid: p["text"] for pid, p in self.passages(pids).items()}
 
-    def iter_texts(self):
-        cur = self.corpus_db().execute("SELECT text FROM passages ORDER BY pid")
-        for (text,) in cur:
-            yield text
+    def iter_texts(self) -> Iterator[str]:
+        """Every passage in pid order, streamed on a connection of its own so that a long scan neither
+        holds the lookup lock nor loads the corpus into memory."""
+        with self._db_lock:
+            db_path = self._corpus_db_path()
+        db = sqlite3.connect(db_path, check_same_thread=False)
+        try:
+            for (text,) in db.execute("SELECT text FROM passages ORDER BY pid"):
+                yield text
+        finally:
+            db.close()
 
     # ----- models and indexes ---------------------------------------------------------------
     def _encoder(self, name: str) -> STEncoder:

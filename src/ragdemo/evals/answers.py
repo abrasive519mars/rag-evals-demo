@@ -31,17 +31,27 @@ class AnswerRow:
     per_query: list[dict] = field(default_factory=list)
 
 
-def _cache_key(mode: str, model: str, question: str, pids: list[int]) -> str:
-    """The generator never sees the mode name, only the question and the passages, so two modes that
-    retrieve the same top-k share one generation. That is also fewer API calls on a capped free tier."""
-    raw = json.dumps({"model": model, "q": question, "pids": pids}, sort_keys=True)
+def _cache_key(model: str, question: str, passages: list[dict]) -> str:
+    """Keyed on exactly what the generator is shown: the model, the question, and each passage's id and
+    text. The mode name is not part of it, so two modes that retrieve the same top-k share one generation
+    (fewer calls on a capped free tier), and an entry can only be reused for the same passage text."""
+    shown = [[p["pid"], p["text"]] for p in passages]
+    raw = json.dumps({"model": model, "q": question, "passages": shown}, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _retrieve(
+    art: Artifacts, retriever: Retriever, q: dict, cfg: RetrievalConfig
+) -> tuple[dict, list[dict], float]:
+    res = retriever.search(q["query"], cfg)
+    by_pid = art.passages([h.pid for h in res.hits])
+    return q, [by_pid[h.pid] for h in res.hits], round(res.timings_ms.get("total", 0.0), 2)
+
+
 def _generate_cached(
-    gen: Generator, cache_dir: Path, mode: str, question: str, passages: list[dict]
+    gen: Generator, cache_dir: Path, question: str, passages: list[dict]
 ) -> tuple[Answer, float, bool]:
-    key = _cache_key(mode, gen.name, question, [p["pid"] for p in passages])
+    key = _cache_key(gen.name, question, passages)
     path = cache_dir / f"{key}.json"
     if path.exists():
         blob = json.loads(path.read_text(encoding="utf-8"))
@@ -120,29 +130,30 @@ def run(
     gen_workers: int = 1,
     generate_only: bool = False,
 ) -> dict:
-    """Per mode: retrieve and generate for every query (`gen_workers` at a time; keep 1 against a metered
-    API, the cache makes reruns free), then grade with `judge_workers` concurrent judge calls. With
-    `generate_only` the generation cache is filled and nothing is graded or written, so the generator and
-    the judge can be served one after the other on a single GPU."""
+    """Per mode: retrieve for every query one at a time, generate `gen_workers` answers at a time (keep 1
+    against a metered API, the cache makes reruns free), then grade with `judge_workers` concurrent judge
+    calls. With `generate_only` the generation cache is filled and nothing is graded or written, so the
+    generator and the judge can be served one after the other on a single GPU."""
     out_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
     queries = art.load_queries("legacy200")[:limit] + art.load_queries("unans50")[: (limit or 50)]
     rows: list[AnswerRow] = []
     t_all = time.time()
+
+    def produce(item: tuple[dict, list[dict], float]) -> tuple[dict, Answer, float, float | None]:
+        q, passages, retrieval_ms = item
+        ans, ms, cached = _generate_cached(generator, cache_dir, q["query"], passages)
+        return q, ans, retrieval_ms, (None if cached else ms)
+
     for mode in modes:
         cfg = RetrievalConfig(mode=mode, k_final=k_final, ef_search=art.s.ef_search)
         row = AnswerRow(mode=mode)
-        gen_ms: list[float] = []
-
-        def produce(q: dict, cfg=cfg, mode=mode) -> tuple[dict, Answer, float, float | None]:
-            res = retriever.search(q["query"], cfg)
-            by_pid = art.passages([h.pid for h in res.hits])
-            passages = [by_pid[h.pid] for h in res.hits if h.pid in by_pid]
-            ans, ms, cached = _generate_cached(generator, cache_dir, mode, q["query"], passages)
-            return q, ans, round(res.timings_ms.get("total", 0.0), 2), (None if cached else ms)
-
+        # Only the generator calls run in parallel. The encoder, the index and the reranker are shared
+        # objects, retrieval is milliseconds next to a generation, and a retrieval time taken while other
+        # queries compete for the same models would not be the time the report says it is.
+        retrieved = [_retrieve(art, retriever, q, cfg) for q in queries]
         with ThreadPoolExecutor(max_workers=max(1, gen_workers)) as pool:
-            produced = list(pool.map(produce, queries))
+            produced = list(pool.map(produce, retrieved))
         gen_ms = [ms for *_, ms in produced if ms is not None]
         generated = [(q, ans, retrieval_ms) for q, ans, retrieval_ms, _ in produced]
         if generate_only:

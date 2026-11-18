@@ -1,4 +1,4 @@
-"""Grading answers with several judge workers gives the same report as grading them one at a time."""
+"""Generating and grading with several workers gives the same report as doing both one at a time."""
 
 import json
 
@@ -79,12 +79,22 @@ def _run(tmp_path, workers: int) -> dict:
         k_final=2,
         cache_dir=tmp_path / f"cache{workers}",
         judge_workers=workers,
+        gen_workers=workers,
     )
 
 
-def test_parallel_grading_matches_sequential(tmp_path):
+def test_parallel_generation_and_grading_match_sequential(tmp_path):
     one, four = _run(tmp_path / "a", 1), _run(tmp_path / "b", 4)
     strip = lambda rep: [{k: v for k, v in r.items() if k != "latency_ms"} for r in rep["rows"]]  # noqa: E731
     assert strip(one) == strip(four)
     assert {r["mode"] for r in four["rows"]} == {"bm25", "hybrid"}
     assert all(r["n"] == 3 for r in four["rows"])
+
+
+def test_generation_cache_key_covers_the_passage_text_not_only_the_ids():
+    key = answers_eval._cache_key
+    base = key("model", "question", [{"pid": 1, "text": "one", "url": "a"}])
+    assert base == key("model", "question", [{"pid": 1, "text": "one", "url": "b"}])  # the url is not shown
+    assert base != key("model", "question", [{"pid": 1, "text": "another passage"}])
+    assert base != key("model", "question", [{"pid": 2, "text": "one"}])
+    assert base != key("other model", "question", [{"pid": 1, "text": "one"}])
