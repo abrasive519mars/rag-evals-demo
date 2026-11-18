@@ -11,8 +11,9 @@ For the answer evaluation, start colab_ollama.py (serves the generator and the j
 set GEN_BASE_URL, GEN_MODEL, JUDGE_BASE_URL, JUDGE_MODEL and OPENAI_API_KEY=local, then run
 `--answers --judge openai`. colab_llm_server.py (vLLM) is the faster path on GPUs newer than a T4.
 
-Generations and judge verdicts are cached; the cache is stored on the dataset repo as cache.tar between
-runs, so a run that stops at a rate limit or a runtime reset resumes where it left off.
+Generations and judge verdicts are cached; the cache is saved to the dataset repo as cache.tar every ten
+minutes and when the run ends, so a run that stops at a rate limit or a runtime reset resumes close to
+where it left off.
 
 Quality metrics (recall, MRR, nDCG, judge verdicts) do not depend on the hardware. The per-stage latencies
 in the report do, so they are labelled with the Colab GPU and are not the numbers quoted for the Space;
@@ -25,12 +26,14 @@ import os
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 from pathlib import Path
 
 REPO = "abrasive519mars/rag-evals-artifacts"
 WORK = Path("/content/rag-evals")
 RAW = "https://raw.githubusercontent.com/abrasive519mars/rag-evals-demo/main"
+CHECKPOINT_MINUTES = 10
 
 
 def restore_cache(token: str) -> None:
@@ -52,13 +55,22 @@ def restore_cache(token: str) -> None:
     print(f"restored {n} cached generations and verdicts", flush=True)
 
 
-def save_cache(api, token: str) -> None:
-    cache = WORK / "data" / "cache"
-    if not cache.exists():
+def tar_cache(root: Path, tar_path: Path) -> int:
+    """Archive the finished cache entries under root/data/cache and return how many there were. Only
+    *.json is taken: an entry gets that name by a rename once it is complete, so an archive made while
+    the evaluation is still writing never holds half a file."""
+    entries = sorted((root / "data" / "cache").rglob("*.json"))
+    with tarfile.open(tar_path, "w") as tar:
+        for entry in entries:
+            tar.add(entry, arcname=entry.relative_to(root).as_posix())
+    return len(entries)
+
+
+def save_cache(api) -> None:
+    if not (WORK / "data" / "cache").exists():
         return
     path = WORK / "cache.tar"
-    with tarfile.open(path, "w") as tar:
-        tar.add(cache, arcname="data/cache")
+    n = tar_cache(WORK, path)
     api.upload_file(
         path_or_fileobj=str(path),
         path_in_repo="cache.tar",
@@ -66,10 +78,21 @@ def save_cache(api, token: str) -> None:
         repo_type="dataset",
         commit_message="Generation and judge caches",
     )
-    print(f"cache saved ({path.stat().st_size / 1e6:.1f} MB)", flush=True)
+    print(f"cache saved ({n} entries, {path.stat().st_size / 1e6:.1f} MB)", flush=True)
+
+
+def checkpoint_cache(api, stop: threading.Event) -> None:
+    """Save the cache every few minutes while the evaluation runs. A free Colab runtime can be recycled
+    mid-run, and a cache that is only saved at the end goes with it."""
+    while not stop.wait(CHECKPOINT_MINUTES * 60):
+        try:
+            save_cache(api)
+        except Exception as exc:  # noqa: BLE001 - a failed checkpoint must not stop the evaluation
+            print(f"cache checkpoint failed ({type(exc).__name__}: {exc})", flush=True)
 
 
 def main() -> None:
+    os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"  # one line per checkpoint in the cell, not a bar each
     from huggingface_hub import HfApi
 
     token = os.environ.get("HF_TOKEN") or sys.exit("set HF_TOKEN")
@@ -113,13 +136,19 @@ def main() -> None:
         restore_cache(token)
 
     t = time.time()
+    stop = threading.Event()
+    checkpoints = threading.Thread(target=checkpoint_cache, args=(api, stop), daemon=True)
+    if "--answers" in flags:
+        checkpoints.start()
     try:
         subprocess.run(
             [sys.executable, "-m", "ragdemo.evals.run", *flags, "--out", "evals"], env=env, check=True
         )
     finally:
         if "--answers" in flags:
-            save_cache(api, token)
+            stop.set()
+            checkpoints.join()  # let a checkpoint in flight finish before the final save rewrites the tar
+            save_cache(api)
     print(f"evaluation done in {(time.time() - t) / 60:.1f} min", flush=True)
 
     api.upload_folder(

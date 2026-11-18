@@ -18,6 +18,7 @@ from pathlib import Path
 from ..artifacts import Artifacts
 from ..generation import Answer, Generator, parse_answer
 from ..pipeline import RetrievalConfig, Retriever
+from .cache import write_atomic
 from .judge import Judge
 from .metrics import percentiles
 
@@ -63,7 +64,7 @@ def _generate_cached(
     t0 = time.perf_counter()
     ans = gen.generate(question, passages)
     ms = (time.perf_counter() - t0) * 1000
-    path.write_text(json.dumps({"text": ans.text, "usage": ans.usage, "ms": ms}), encoding="utf-8")
+    write_atomic(path, json.dumps({"text": ans.text, "usage": ans.usage, "ms": ms}))
     return ans, ms, False
 
 

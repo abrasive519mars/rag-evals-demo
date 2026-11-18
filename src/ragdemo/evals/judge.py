@@ -16,6 +16,8 @@ import time
 from pathlib import Path
 from typing import Protocol
 
+from .cache import write_atomic
+
 PROMPT_VERSION = "v1"
 
 FAITHFULNESS_SYSTEM = """You are a strict fact-checker for a question-answering system.
@@ -163,7 +165,7 @@ class OpenAIJudge:
                 model=self.name, messages=messages, response_format={"type": "json_object"}, temperature=0
             )
         raw = resp.choices[0].message.content or "{}"
-        path.write_text(raw, encoding="utf-8")
+        write_atomic(path, raw)
         return raw
 
     def faithfulness(self, answer: str, passages: list[str]) -> dict:
@@ -257,7 +259,7 @@ class GeminiJudge:
                 time.sleep(delay)
                 delay = min(delay * 2, 60.0)
         raw = resp.text or "{}"
-        path.write_text(raw, encoding="utf-8")
+        write_atomic(path, raw)
         return raw
 
     def faithfulness(self, answer: str, passages: list[str]) -> dict:
